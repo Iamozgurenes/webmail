@@ -37,6 +37,13 @@ function getSlot(request: NextRequest): number {
 
 export async function POST(request: NextRequest) {
   try {
+    await configManager.ensureLoaded();
+    if (configManager.get<boolean>('legacyProxyCookieAuth', false)) {
+      return NextResponse.json(
+        { error: 'Password sessions are disabled; use the Legacy Proxy HttpOnly cookie session.' },
+        { status: 409 },
+      );
+    }
     const oauthEnabled = configManager.get<boolean>('oauthEnabled', false);
     const oauthOnly = configManager.get<boolean>('oauthOnly', false);
     if (oauthEnabled && oauthOnly) {
@@ -153,6 +160,13 @@ export async function GET(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
+    await configManager.ensureLoaded();
+    if (configManager.get<boolean>('legacyProxyCookieAuth', false)) {
+      return NextResponse.json(
+        { error: 'Password session retrieval is disabled.' },
+        { status: 410 },
+      );
+    }
     // Require all Sec-Fetch-* headers to match a same-origin fetch() call.
     // Browsers set these automatically and they cannot be overridden by JS.
     const secFetchSite = request.headers.get('sec-fetch-site');

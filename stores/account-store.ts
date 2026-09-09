@@ -12,7 +12,7 @@ export interface AccountEntry {
   /** Username / email used to authenticate */
   username: string;
   /** Authentication mode */
-  authMode: 'basic' | 'oauth';
+  authMode: 'basic' | 'oauth' | 'cookie';
   /** Cookie slot index for session/token cookies (0 ≤ slot < MAX_ACCOUNT_SLOTS) */
   cookieSlot: number;
   /** Whether "Remember Me" was checked (basic auth only) */

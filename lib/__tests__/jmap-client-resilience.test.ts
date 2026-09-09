@@ -106,6 +106,25 @@ describe('JMAPClient resilience', () => {
     return client;
   }
 
+  it('uses credentials and a slot header for HttpOnly cookie sessions', async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse(200, makeSession()));
+    const client = JMAPClient.withCookieSession('https://mail.example.com', 'user@test.com', 2);
+    await client.connect();
+    liveClients.push(client);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://mail.example.com/.well-known/jmap',
+      expect.objectContaining({
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-JMAP-Cookie-Slot': '2',
+        }),
+      }),
+    );
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).has('Authorization')).toBe(false);
+  });
+
   describe('authenticatedFetch - network error retry', () => {
     it('retries once on transient network error', async () => {
       const client = await createConnectedClient();

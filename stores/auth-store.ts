@@ -31,7 +31,7 @@ interface AuthState {
   client: IJMAPClient | null;
   identities: Identity[];
   primaryIdentity: Identity | null;
-  authMode: 'basic' | 'oauth';
+  authMode: 'basic' | 'oauth' | 'cookie';
   rememberMe: boolean;
   accessToken: string | null;
   tokenExpiresAt: number | null;
@@ -203,6 +203,9 @@ async function syncStalwartAuthContext(
   authHeader: string,
   slot: number,
 ): Promise<void> {
+  // Cookie-authenticated Legacy Proxy sessions intentionally expose no
+  // Authorization header to browser JavaScript.
+  if (!authHeader) return;
   try {
     const response = await apiFetch('/api/auth/stalwart-context', {
       method: 'POST',
@@ -702,11 +705,31 @@ export const useAuthStore = create<AuthState>()(
             : accountStore.getNextCookieSlot();
 
           let client: JMAPClient;
+          const cookieAuthEnabled = !totp && (await fetchConfig()).legacyProxyCookieAuth;
           let upgradedToOAuth = false;
           let oauthAccessToken: string | null = null;
           let oauthExpiresIn = 0;
 
-          if (totp) {
+          if (cookieAuthEnabled) {
+            const normalizedServerUrl = serverUrl.replace(/\/+$/, '');
+            const loginResponse = await fetch(`${normalizedServerUrl}/api/login`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                username,
+                password,
+                cookieSession: true,
+                rememberMe: !!rememberMe,
+                slot: cookieSlot,
+              }),
+            });
+            if (!loginResponse.ok) {
+              throw new Error(loginResponse.status === 401 ? 'Invalid username or password' : `Login failed: ${loginResponse.status}`);
+            }
+            client = JMAPClient.withCookieSession(normalizedServerUrl, username, cookieSlot);
+            await client.connect();
+          } else if (totp) {
             // Stalwart 0.16+ dropped the `password$totp` basic-auth convention;
             // the MFA code must be exchanged for tokens via the structured login
             // endpoint (handled server-side). Token auth also survives TOTP
@@ -781,13 +804,13 @@ export const useAuthStore = create<AuthState>()(
           // Identities can fly in parallel with everything below.
           const identitiesPromise = client.getIdentities();
 
-          const effectiveAuthMode = upgradedToOAuth ? 'oauth' : 'basic';
+          const effectiveAuthMode = cookieAuthEnabled ? 'cookie' : (upgradedToOAuth ? 'oauth' : 'basic');
 
           // Run the remaining independent requests in parallel. The session
           // write and stalwart-context write are best-effort persistence; the
           // outer login still succeeds even if they log a warning. Errors are
           // caught locally so Promise.all doesn't reject on either.
-          const sessionWrite: Promise<unknown> = (rememberMe && !upgradedToOAuth)
+          const sessionWrite: Promise<unknown> = (rememberMe && !upgradedToOAuth && !cookieAuthEnabled)
             ? apiFetch(`/api/auth/session?slot=${cookieSlot}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1341,6 +1364,7 @@ export const useAuthStore = create<AuthState>()(
         const state = get();
         const wasDemoMode = state.isDemoMode;
         const wasOAuth = state.authMode === 'oauth';
+        const wasCookieAuth = state.authMode === 'cookie';
         const accountId = state.activeAccountId;
         const accountStore = useAccountStore.getState();
         const account = accountId ? accountStore.getAccountById(accountId) : null;
@@ -1363,6 +1387,16 @@ export const useAuthStore = create<AuthState>()(
         const oldClient = state.client;
         set({ client: null });
         oldClient?.disconnect();
+
+        if (wasCookieAuth && state.serverUrl) {
+          fetch(`${state.serverUrl.replace(/\/+$/, '')}/api/logout`, {
+            method: 'POST',
+            credentials: 'include',
+            keepalive: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot }),
+          }).catch(() => {});
+        }
 
         // Remove client from multi-account map
         if (accountId) {
@@ -1461,6 +1495,7 @@ export const useAuthStore = create<AuthState>()(
         if (!account) return;
         const slot = account.cookieSlot ?? 0;
         const wasOAuth = account.authMode === 'oauth';
+        const wasCookieAuth = account.authMode === 'cookie';
 
         clearRefreshTimer(accountId);
         const client = clients.get(accountId);
@@ -1469,6 +1504,15 @@ export const useAuthStore = create<AuthState>()(
         evictAccount(accountId);
         accountStore.removeAccount(accountId);
 
+        if (wasCookieAuth) {
+          fetch(`${account.serverUrl.replace(/\/+$/, '')}/api/logout`, {
+            method: 'POST',
+            credentials: 'include',
+            keepalive: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot }),
+          }).catch(() => {});
+        }
         apiFetch(`/api/auth/session?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
         if (wasOAuth) {
           apiFetch(`/api/auth/token?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
@@ -1498,6 +1542,15 @@ export const useAuthStore = create<AuthState>()(
         const accountStore = useAccountStore.getState();
         const allAccounts = [...accountStore.accounts];
         for (const account of allAccounts) {
+          if (account.authMode === 'cookie') {
+            fetch(`${account.serverUrl.replace(/\/+$/, '')}/api/logout`, {
+              method: 'POST',
+              credentials: 'include',
+              keepalive: true,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ slot: account.cookieSlot }),
+            }).catch(() => {});
+          }
           accountStore.removeAccount(account.id);
         }
 
@@ -1564,6 +1617,15 @@ export const useAuthStore = create<AuthState>()(
                   targetAccount.cookieSlot,
                 );
               }
+            } else if (targetAccount.authMode === 'cookie') {
+              targetClient = JMAPClient.withCookieSession(
+                targetAccount.serverUrl,
+                targetAccount.username,
+                targetAccount.cookieSlot,
+              );
+              bindClientStatusHandlers(targetClient, set, get, accountId);
+              await targetClient.connect();
+              clients.set(accountId, targetClient);
             } else if (targetAccount.authMode === 'basic' && targetAccount.rememberMe) {
               const res = await apiFetch(`/api/auth/session?slot=${targetAccount.cookieSlot}`, { method: 'PUT' });
               if (res.ok) {
@@ -1835,6 +1897,17 @@ export const useAuthStore = create<AuthState>()(
                   if (res.status >= 500) notifySignInAgain();
                   throw new Error(`Token refresh failed: ${res.status}`);
                 }
+              } else if (account.authMode === 'cookie') {
+                const client = JMAPClient.withCookieSession(
+                  account.serverUrl,
+                  account.username,
+                  account.cookieSlot,
+                );
+                bindClientStatusHandlers(client, set, get, account.id);
+                await client.connect();
+                clients.set(account.id, client);
+                accountStore.updateAccount(account.id, { isConnected: true, hasError: false });
+                void syncAccountDisplayName(account.id, client);
               } else {
                 const res = await apiFetch(`/api/auth/session?slot=${account.cookieSlot}`, { method: 'PUT' });
                 if (res.ok) {
@@ -2214,7 +2287,7 @@ export const useAuthStore = create<AuthState>()(
           serverUrl: state.serverUrl,
           username: state.username,
           authMode: state.authMode,
-          isAuthenticated: (state.authMode === 'oauth' || state.rememberMe)
+          isAuthenticated: (state.authMode === 'oauth' || state.authMode === 'cookie' || state.rememberMe)
             ? state.isAuthenticated
             : undefined,
           rememberMe: state.rememberMe,

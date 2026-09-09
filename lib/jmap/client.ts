@@ -682,7 +682,8 @@ export class JMAPClient implements IJMAPClient {
   private password: string;
   private basePassword: string = '';
   private authHeader: string;
-  private authMode: 'basic' | 'bearer' = 'basic';
+  private authMode: 'basic' | 'bearer' | 'cookie' = 'basic';
+  private cookieSlot: number = 0;
   private onTokenRefresh?: () => Promise<string | null>;
   private onTotpRequired?: () => Promise<string | null>;
   private apiUrl: string = "";
@@ -738,6 +739,18 @@ export class JMAPClient implements IJMAPClient {
     client.authMode = 'bearer';
     client.authHeader = `Bearer ${accessToken}`;
     client.onTokenRefresh = onTokenRefresh;
+    return client;
+  }
+
+  /**
+   * Connect through an origin-bound HttpOnly session cookie. No reusable
+   * mailbox credential is held by or exposed to browser JavaScript.
+   */
+  static withCookieSession(serverUrl: string, username: string, slot = 0): JMAPClient {
+    const client = new JMAPClient(serverUrl, username, '');
+    client.authMode = 'cookie';
+    client.authHeader = '';
+    client.cookieSlot = slot;
     return client;
   }
 
@@ -850,7 +863,12 @@ export class JMAPClient implements IJMAPClient {
     }, timeoutMs);
 
     try {
-      return await fetch(url, { ...init, headers, signal: controller.signal });
+      return await fetch(url, {
+        ...init,
+        headers,
+        signal: controller.signal,
+        credentials: this.authMode === 'cookie' ? 'include' : init?.credentials,
+      });
     } catch (error) {
       if (timedOut) throw new RequestTimeoutError(timeoutMs);
       throw error;
@@ -872,7 +890,9 @@ export class JMAPClient implements IJMAPClient {
     }
 
     const timeoutMs = opts?.timeoutMs ?? JMAPClient.REQUEST_TIMEOUT_MS;
-    const headers = { ...init?.headers as Record<string, string>, 'Authorization': this.authHeader };
+    const headers = { ...init?.headers as Record<string, string> };
+    if (this.authHeader) headers.Authorization = this.authHeader;
+    if (this.authMode === 'cookie') headers['X-JMAP-Cookie-Slot'] = String(this.cookieSlot);
     let response: Response;
 
     try {
@@ -961,7 +981,10 @@ export class JMAPClient implements IJMAPClient {
     if (response.redirected && response.status === 401) {
       return fetch(response.url, {
         method: 'GET',
-        headers: { 'Authorization': this.authHeader },
+        headers: this.authHeader
+          ? { 'Authorization': this.authHeader }
+          : { 'X-JMAP-Cookie-Slot': String(this.cookieSlot) },
+        credentials: this.authMode === 'cookie' ? 'include' : undefined,
       });
     }
     if (!response.ok || !response.redirected) return response;
@@ -973,7 +996,10 @@ export class JMAPClient implements IJMAPClient {
 
     return fetch(response.url, {
       method: 'GET',
-      headers: { 'Authorization': this.authHeader },
+      headers: this.authHeader
+        ? { 'Authorization': this.authHeader }
+        : { 'X-JMAP-Cookie-Slot': String(this.cookieSlot) },
+      credentials: this.authMode === 'cookie' ? 'include' : undefined,
     });
   }
 
@@ -4223,7 +4249,9 @@ export class JMAPClient implements IJMAPClient {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      xhr.setRequestHeader('Authorization', this.authHeader);
+      if (this.authHeader) xhr.setRequestHeader('Authorization', this.authHeader);
+      if (this.authMode === 'cookie') xhr.setRequestHeader('X-JMAP-Cookie-Slot', String(this.cookieSlot));
+      xhr.withCredentials = this.authMode === 'cookie';
       xhr.responseType = 'text';
 
       const onAbort = () => xhr.abort();

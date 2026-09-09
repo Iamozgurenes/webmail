@@ -28,6 +28,7 @@ const MANAGED_ENV = [
   'APP_NAME', 'NEXT_PUBLIC_APP_NAME', 'JMAP_SERVER_URL', 'NEXT_PUBLIC_JMAP_SERVER_URL',
   'OAUTH_ENABLED', 'OAUTH_CLIENT_ID', 'OAUTH_ISSUER_URL', 'SESSION_SECRET',
   'SESSION_SECRET_FILE', 'SETTINGS_SYNC_ENABLED', 'STALWART_FEATURES', 'DEV_MOCK_JMAP',
+  'LEGACY_PROXY_COOKIE_AUTH',
   'FAVICON_URL', 'APP_LOGO_LIGHT_URL', 'APP_LOGO_DARK_URL', 'LOGIN_COMPANY_NAME',
   'LOGIN_IMPRINT_URL', 'LOGIN_PRIVACY_POLICY_URL', 'LOGIN_WEBSITE_URL', 'DOMAIN_BRANDING',
 ] as const;
@@ -162,6 +163,15 @@ describe('config API route', () => {
 
     const config = await getConfig();
 
+    expect(config.rememberMeEnabled).toBe(true);
+  });
+
+  it('should enable reload-safe sessions for Legacy Proxy cookie auth without SESSION_SECRET', async () => {
+    vi.stubEnv('LEGACY_PROXY_COOKIE_AUTH', 'true');
+
+    const config = await getConfig();
+
+    expect(config.legacyProxyCookieAuth).toBe(true);
     expect(config.rememberMeEnabled).toBe(true);
   });
 

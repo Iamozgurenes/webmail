@@ -52,6 +52,7 @@ export async function GET(request: NextRequest) {
   const stalwartFeaturesEnabled = configManager.get<boolean>('stalwartFeaturesEnabled', true);
   const stalwartJmapPassthroughEnabled =
     stalwartFeaturesEnabled && configManager.get<boolean>('stalwartJmapPassthroughEnabled', true);
+  const legacyProxyCookieAuth = configManager.get<boolean>('legacyProxyCookieAuth', false);
   const allowedFrameAncestors = configManager.get<string>('allowedFrameAncestors', '');
 
   return NextResponse.json(
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest) {
       oauthClientId: configManager.get<string>('oauthClientId', ''),
       oauthIssuerUrl: configManager.get<string>('oauthIssuerUrl', ''),
       oauthScopes: getOauthScopes(),
-      rememberMeEnabled: hasSessionSecret(),
+      rememberMeEnabled: hasSessionSecret() || legacyProxyCookieAuth,
       settingsSyncEnabled: configManager.get<boolean>('settingsSyncEnabled', false) && hasSessionSecret(),
       stalwartFeaturesEnabled,
       stalwartJmapPassthroughEnabled,
@@ -87,6 +88,7 @@ export async function GET(request: NextRequest) {
       allowCustomJmapEndpoint: configManager.get<boolean>('allowCustomJmapEndpoint', false),
       jmapServers: redactJmapServers(parseJmapServers(configManager.get<unknown>('jmapServers', []))),
       jmapServerAutoPickByDomain: configManager.get<boolean>('jmapServerAutoPickByDomain', false),
+      legacyProxyCookieAuth,
       autoSsoEnabled: configManager.get<boolean>('autoSsoEnabled', false),
       embeddedMode: !!allowedFrameAncestors && allowedFrameAncestors !== "'none'",
       parentOrigin: configManager.get<string>('parentOrigin', ''),

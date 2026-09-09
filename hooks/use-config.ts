@@ -38,6 +38,7 @@ interface ConfigData {
   allowCustomJmapEndpoint: boolean;
   jmapServers: PublicJmapServerEntry[];
   jmapServerAutoPickByDomain: boolean;
+  legacyProxyCookieAuth: boolean;
   embeddedMode: boolean;
   parentOrigin: string;
 }
@@ -124,6 +125,7 @@ export function useConfig(): AppConfig {
     allowCustomJmapEndpoint: configCache?.allowCustomJmapEndpoint || false,
     jmapServers: configCache?.jmapServers || [],
     jmapServerAutoPickByDomain: configCache?.jmapServerAutoPickByDomain || false,
+    legacyProxyCookieAuth: configCache?.legacyProxyCookieAuth || false,
     embeddedMode: configCache?.embeddedMode || false,
     parentOrigin: configCache?.parentOrigin || '',
     isLoading: !configCache,
@@ -166,6 +168,7 @@ export function useConfig(): AppConfig {
         allowCustomJmapEndpoint: configCache.allowCustomJmapEndpoint,
         jmapServers: configCache.jmapServers || [],
         jmapServerAutoPickByDomain: configCache.jmapServerAutoPickByDomain || false,
+        legacyProxyCookieAuth: configCache.legacyProxyCookieAuth || false,
         embeddedMode: configCache.embeddedMode,
         parentOrigin: configCache.parentOrigin,
         isLoading: false,
@@ -209,6 +212,7 @@ export function useConfig(): AppConfig {
           allowCustomJmapEndpoint: data.allowCustomJmapEndpoint,
           jmapServers: data.jmapServers || [],
           jmapServerAutoPickByDomain: data.jmapServerAutoPickByDomain || false,
+          legacyProxyCookieAuth: data.legacyProxyCookieAuth || false,
           embeddedMode: data.embeddedMode,
           parentOrigin: data.parentOrigin,
           isLoading: false,

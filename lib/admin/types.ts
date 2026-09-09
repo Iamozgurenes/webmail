@@ -255,6 +255,9 @@ export const CONFIG_ENV_MAP: Record<string, { envVar: string; fileEnvVar?: strin
   stalwartAdminAccess: { envVar: 'STALWART_ADMIN_ACCESS', type: 'enum', defaultValue: 'auto', enumValues: ['auto', 'password', 'off'] },
   jmapServers: { envVar: 'JMAP_SERVERS', type: 'json', defaultValue: [] },
   jmapServerAutoPickByDomain: { envVar: 'JMAP_SERVER_AUTO_PICK_BY_DOMAIN', type: 'boolean', defaultValue: false },
+  // Authenticate against Bulwark Legacy Proxy using its origin-bound HttpOnly
+  // cookie instead of persisting the upstream mailbox password in webmail.
+  legacyProxyCookieAuth: { envVar: 'LEGACY_PROXY_COOKIE_AUTH', type: 'boolean', defaultValue: false },
   domainBranding: { envVar: 'DOMAIN_BRANDING', type: 'json', defaultValue: [] },
   autoSsoEnabled: { envVar: 'AUTO_SSO_ENABLED', type: 'boolean', defaultValue: false },
   cookieSameSite: { envVar: 'COOKIE_SAME_SITE', type: 'enum', defaultValue: 'lax', enumValues: ['lax', 'strict', 'none'] },
