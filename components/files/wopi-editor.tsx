@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X } from "@/components/icons";
 import type { FileResource } from "@/stores/file-store";
 
 interface WopiEditorProps {

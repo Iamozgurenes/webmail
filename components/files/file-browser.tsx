@@ -12,7 +12,7 @@ import {
   FileArchive, FileSpreadsheet, Presentation, FileCode,
   Box, PenTool, Terminal as TerminalIcon, Database, Type as TypeIcon,
   Menu, Users, Share2, SquarePen,
-} from "lucide-react";
+} from "@/components/icons";
 import { useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
 import { cn, formatFileSize } from "@/lib/utils";
@@ -1248,7 +1248,7 @@ export function FileBrowser({
                 // open so they can expand/collapse without dismissing.
                 const target = e.target as HTMLElement;
                 const btn = target.closest('button');
-                if (btn && !btn.querySelector('svg.lucide-chevron-right, svg.lucide-chevron-down')) {
+                if (btn && !btn.querySelector('svg.tabler-icon-chevron-right, svg.tabler-icon-chevron-down')) {
                   setNarrowSidebarOpen(false);
                 }
               }}

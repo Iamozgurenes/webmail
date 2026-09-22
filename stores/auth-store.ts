@@ -19,6 +19,22 @@ import { notifyParent } from '@/lib/iframe-bridge';
 import { snapshotAccount, restoreAccount, clearAllStores, evictAccount, evictAll } from '@/lib/account-state-manager';
 import type { Identity } from '@/lib/jmap/types';
 import { authHooks } from '@/lib/plugin-hooks';
+import { IS_LITE, IS_LITE_STALWART } from '@/lib/lite';
+import {
+  LiteLoginError,
+  clearAllLiteSessions,
+  clearLiteRefreshToken,
+  clearLiteSlot,
+  getLiteClientId,
+  liteExchangeAuthorizationCode,
+  liteRefreshTokens,
+  liteTokenLogin,
+  nameLiteRefreshToken,
+  readLiteBasicSession,
+  saveLiteBasicSession,
+  saveLiteRefreshToken,
+} from '@/lib/auth/lite-tokens';
+import { clearLiteOAuthFlow, readLiteOAuthFlow } from '@/lib/auth/lite-oauth';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -102,8 +118,9 @@ function isRateLimitError(error: unknown): error is RateLimitError {
  * browser-side connect so no deployment loses the ability to log in.
  */
 async function precheckBasicCredentials(serverUrl: string, username: string, password: string): Promise<boolean> {
-  // App-relative servers (the dev mock) never send a Basic challenge.
-  if (serverUrl.startsWith('/')) return false;
+  // App-relative servers (the dev mock) never send a Basic challenge, and the
+  // static Lite build has no backend to ask.
+  if (IS_LITE || serverUrl.startsWith('/')) return false;
   try {
     const res = await apiFetch('/api/auth/verify', {
       method: 'POST',
@@ -206,6 +223,8 @@ async function syncStalwartAuthContext(
   // Cookie-authenticated Legacy Proxy sessions intentionally expose no
   // Authorization header to browser JavaScript.
   if (!authHeader) return;
+  // The passthrough context lives on the server; Lite has none.
+  if (IS_LITE) return;
   try {
     const response = await apiFetch('/api/auth/stalwart-context', {
       method: 'POST',
@@ -219,6 +238,190 @@ async function syncStalwartAuthContext(
   } catch (error) {
     debug.warn('auth', 'Failed to sync Stalwart auth context:', error);
   }
+}
+
+/*
+ * Per-slot credential endpoints.
+ *
+ * The regular build keeps refresh tokens and remembered passwords in encrypted
+ * per-slot cookies behind /api/auth/*. The static Lite build has no server and
+ * keeps them in web storage instead (lib/auth/lite-tokens.ts). The Lite
+ * variants below answer with the same Response shapes the routes do, so every
+ * caller's status handling (401 = rejected, 5xx/network = outage) is shared.
+ */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function liteErrorStatus(err: LiteLoginError): number {
+  switch (err.code) {
+    case 'endpoint_missing':
+      return 404;
+    case 'totp_required':
+    case 'invalid_credentials':
+    case 'refresh_rejected':
+      return 401;
+    default:
+      return err.status && err.status >= 500 ? err.status : 502;
+  }
+}
+
+/** POST /api/auth/totp-token-exchange - password (+ optional TOTP) to bearer tokens for `slot`. */
+async function exchangePasswordForTokens(params: {
+  serverUrl: string;
+  username: string;
+  password: string;
+  totp?: string;
+  slot: number;
+  redirectUri: string;
+  rememberMe: boolean;
+}): Promise<Response> {
+  const { serverUrl, username, password, totp, slot, redirectUri, rememberMe } = params;
+  if (!IS_LITE) {
+    return apiFetch('/api/auth/totp-token-exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // server_id isn't passed - the route looks up the server entry by
+      // serverUrl, so per-server OAuth still applies for password+TOTP.
+      body: JSON.stringify({ serverUrl, username, password, totp, slot, redirectUri }),
+    });
+  }
+  try {
+    const tokens = await liteTokenLogin({ serverUrl, username, password, totp, redirectUri });
+    // "Remember me" keeps the refresh token across browser restarts
+    // (localStorage); otherwise it lives with the tab (sessionStorage).
+    if (tokens.refreshToken) {
+      saveLiteRefreshToken(slot, { serverUrl, username, refreshToken: tokens.refreshToken, clientId: getLiteClientId() }, rememberMe);
+    } else {
+      clearLiteRefreshToken(slot);
+    }
+    return jsonResponse({ access_token: tokens.accessToken, expires_in: tokens.expiresIn, has_refresh_token: !!tokens.refreshToken });
+  } catch (err) {
+    if (err instanceof LiteLoginError) return jsonResponse({ error: err.code }, liteErrorStatus(err));
+    throw err;
+  }
+}
+
+/** POST /api/auth/token?slot=N - redeem an OAuth authorization code for `slot`. */
+async function exchangeOAuthCode(params: {
+  serverUrl: string;
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+  slot: number;
+  serverId?: string;
+}): Promise<Response> {
+  const { serverUrl, code, codeVerifier, redirectUri, slot, serverId } = params;
+  if (!IS_LITE) {
+    return apiFetch(`/api/auth/token?slot=${slot}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        code_verifier: codeVerifier,
+        redirect_uri: redirectUri,
+        slot,
+        ...(serverId ? { server_id: serverId } : {}),
+      }),
+    });
+  }
+  // The login page parked where and as whom to redeem the code
+  // (lib/auth/lite-oauth.ts); without it this is not a flow we started. A
+  // code is good for one attempt, so the flow goes either way.
+  const flow = readLiteOAuthFlow();
+  clearLiteOAuthFlow();
+  if (!flow) return jsonResponse({ error: 'missing_flow' }, 400);
+  try {
+    const tokens = await liteExchangeAuthorizationCode({
+      tokenEndpoint: flow.tokenEndpoint,
+      code,
+      codeVerifier,
+      redirectUri: flow.redirectUri,
+      clientId: flow.clientId,
+    });
+    // The username is filled in once the session names the account
+    // (nameLiteRefreshToken in loginWithOAuth).
+    if (tokens.refreshToken) {
+      saveLiteRefreshToken(slot, {
+        serverUrl,
+        username: '',
+        refreshToken: tokens.refreshToken,
+        clientId: flow.clientId,
+        tokenEndpoint: flow.tokenEndpoint,
+      }, flow.persistent);
+    } else {
+      clearLiteRefreshToken(slot);
+    }
+    return jsonResponse({ access_token: tokens.accessToken, expires_in: tokens.expiresIn });
+  } catch (err) {
+    if (err instanceof LiteLoginError) return jsonResponse({ error: err.code }, liteErrorStatus(err));
+    throw err;
+  }
+}
+
+/** POST /api/auth/session?slot=N - remember Basic credentials for `slot`. */
+async function persistBasicSession(slot: number, serverUrl: string, username: string, password: string): Promise<void> {
+  if (IS_LITE) {
+    // Only reached when the server has no token login: keep the credentials
+    // with this tab so a reload does not sign the user out.
+    saveLiteBasicSession(slot, { serverUrl, username, password });
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/auth/session?slot=${slot}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverUrl, username, password, slot }),
+    });
+    if (!res.ok) debug.error('Failed to store session: server returned', res.status);
+  } catch (err) {
+    debug.error('Failed to store session:', err);
+  }
+}
+
+/** PUT /api/auth/token?slot=N - renew (or, unless `force`, reuse) the slot's access token. */
+async function fetchSlotAccessToken(slot: number, opts: { force?: boolean } = {}): Promise<Response> {
+  if (!IS_LITE) {
+    return apiFetch(`/api/auth/token?slot=${slot}${opts.force ? '&force=true' : ''}`, { method: 'PUT' });
+  }
+  try {
+    const tokens = await liteRefreshTokens(slot);
+    return jsonResponse({ access_token: tokens.accessToken, expires_in: tokens.expiresIn });
+  } catch (err) {
+    if (err instanceof LiteLoginError) return jsonResponse({ error: err.code }, liteErrorStatus(err));
+    throw err; // network failure - callers treat it as an outage, not a rejection
+  }
+}
+
+/** PUT /api/auth/session[?slot=N] - the slot's remembered Basic credentials. */
+async function fetchSlotSession(slot?: number): Promise<Response> {
+  if (!IS_LITE) {
+    return apiFetch(slot === undefined ? '/api/auth/session' : `/api/auth/session?slot=${slot}`, { method: 'PUT' });
+  }
+  const stored = readLiteBasicSession(slot ?? 0);
+  return stored ? jsonResponse(stored) : jsonResponse({ error: 'no_session' }, 401);
+}
+
+/** DELETE the slot's remembered credentials (and refresh token when `includeToken`). Fire and forget. */
+function discardSlotCredentials(slot: number, includeToken: boolean, keepalive = false): void {
+  if (IS_LITE) {
+    clearLiteSlot(slot);
+    return;
+  }
+  const init: RequestInit = keepalive ? { method: 'DELETE', keepalive: true } : { method: 'DELETE' };
+  apiFetch(`/api/auth/session?slot=${slot}`, init).catch(() => {});
+  if (includeToken) {
+    apiFetch(`/api/auth/token?slot=${slot}`, init).catch(() => {});
+  }
+}
+
+function discardAllCredentials(): void {
+  if (IS_LITE) {
+    clearAllLiteSessions();
+    return;
+  }
+  apiFetch('/api/auth/session?all=true', { method: 'DELETE', keepalive: true }).catch(() => {});
+  apiFetch('/api/auth/token?all=true', { method: 'DELETE', keepalive: true }).catch(() => {});
 }
 
 function bindClientStatusHandlers(
@@ -729,7 +932,14 @@ export const useAuthStore = create<AuthState>()(
             }
             client = JMAPClient.withCookieSession(normalizedServerUrl, username, cookieSlot);
             await client.connect();
-          } else if (totp) {
+          } else {
+            // Lite has no session cookie to remember a password in, so every
+            // password login goes through Stalwart's token flow and only a
+            // refresh token is kept: localStorage with "remember me", the tab's
+            // sessionStorage without it (lib/auth/lite-tokens.ts). Servers
+            // without the endpoint fall back to Basic auth below.
+            const useTokenLogin = !!totp || IS_LITE;
+            if (useTokenLogin) {
             // Stalwart 0.16+ dropped the `password$totp` basic-auth convention;
             // the MFA code must be exchanged for tokens via the structured login
             // endpoint (handled server-side). Token auth also survives TOTP
@@ -739,15 +949,15 @@ export const useAuthStore = create<AuthState>()(
               // The callback URL the OAuth client already registers; the route
               // needs an identical redirect URI for the login + token-exchange
               // steps (and registered when require_client_registration is on).
-              const redirectUri = typeof window !== 'undefined'
-                ? `${window.location.origin}${getPathPrefix()}/${getLocaleFromPath()}/auth/callback`
-                : '';
-              const tokenRes = await apiFetch('/api/auth/totp-token-exchange', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                // server_id isn't passed - the route looks up the server entry by
-                // serverUrl, so per-server OAuth still applies for password+TOTP.
-                body: JSON.stringify({ serverUrl, username, password, totp, slot: cookieSlot, redirectUri }),
+              // Lite on Stalwart uses the mount root instead: one locale-free
+              // URI per Application for the admin to register.
+              const redirectUri = typeof window === 'undefined'
+                ? ''
+                : IS_LITE_STALWART
+                  ? `${window.location.origin}${getPathPrefix()}/`
+                  : `${window.location.origin}${getPathPrefix()}/${getLocaleFromPath()}/auth/callback`;
+              const tokenRes = await exchangePasswordForTokens({
+                serverUrl, username, password, totp, slot: cookieSlot, redirectUri, rememberMe: !!rememberMe,
               });
               if (tokenRes.ok) {
                 const { access_token, expires_in, has_refresh_token } = await tokenRes.json();
@@ -773,7 +983,7 @@ export const useAuthStore = create<AuthState>()(
               await client.connect();
               oauthAccessToken = bearerToken;
               upgradedToOAuth = true;
-            } else {
+            } else if (totp) {
               // Legacy fallback for pre-0.16 Stalwart, which accepts the TOTP
               // appended to the password over basic auth.
               if (await precheckBasicCredentials(serverUrl, username, `${password}$${totp}`)) {
@@ -784,6 +994,12 @@ export const useAuthStore = create<AuthState>()(
               const { useTotpReauthStore } = await import('@/stores/totp-reauth-store');
               client.enableTotpReauth(password, () => useTotpReauthStore.getState().requestTotp());
               debug.log('auth', 'TOTP re-auth enabled (legacy basic-auth path)');
+            } else {
+              // Lite on a server without token login (or one that blocks the
+              // browser's /api/auth call): plain Basic auth; the session is
+              // then kept with the tab only, see persistBasicSession.
+              client = new JMAPClient(serverUrl, username, password);
+              await client.connect();
             }
           } else {
             if (await precheckBasicCredentials(serverUrl, username, password)) {
@@ -791,6 +1007,7 @@ export const useAuthStore = create<AuthState>()(
             }
             client = new JMAPClient(serverUrl, username, password);
             await client.connect();
+          }
           }
 
           // Snapshot/clear before kicking off any feature-store fetches so they
@@ -810,14 +1027,13 @@ export const useAuthStore = create<AuthState>()(
           // write and stalwart-context write are best-effort persistence; the
           // outer login still succeeds even if they log a warning. Errors are
           // caught locally so Promise.all doesn't reject on either.
-          const sessionWrite: Promise<unknown> = (rememberMe && !upgradedToOAuth && !cookieAuthEnabled)
-            ? apiFetch(`/api/auth/session?slot=${cookieSlot}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ serverUrl, username, password, slot: cookieSlot }),
-              }).then((res) => {
-                if (!res.ok) debug.error('Failed to store session: server returned', res.status);
-              }).catch((err) => debug.error('Failed to store session:', err))
+          // In Lite a Basic session is always kept for the tab (sessionStorage),
+          // so a reload does not sign the user out; the regular build only
+          // writes the cookie when the user asked to be remembered. Cookie-auth
+          // accounts never need this client-side session: the Legacy Proxy's
+          // own HttpOnly cookie already survives a reload.
+          const sessionWrite: Promise<unknown> = ((rememberMe || IS_LITE) && !upgradedToOAuth && !cookieAuthEnabled)
+            ? persistBasicSession(cookieSlot, serverUrl, username, password)
             : Promise.resolve();
 
           const [rawIdentities] = await Promise.all([
@@ -991,6 +1207,10 @@ export const useAuthStore = create<AuthState>()(
       loginWithOAuth: async (serverUrl, code, codeVerifier, redirectUri, serverId) => {
         set({ isLoading: true, error: null, isRateLimited: false, rateLimitUntil: null });
 
+        // Lite: the slot whose refresh token this attempt wrote, until the
+        // session has named its account.
+        let unnamedLiteSlot: number | null = null;
+
         try {
           // Determine slot for this account (use slot from sessionStorage if re-adding).
           // Note: `parseInt(getItem(...) || '0')` collapses "no value set" and
@@ -1008,21 +1228,12 @@ export const useAuthStore = create<AuthState>()(
             ? pendingSlot
             : accountStore.getNextCookieSlot();
 
-          const tokenRes = await apiFetch(`/api/auth/token?slot=${slot}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              code,
-              code_verifier: codeVerifier,
-              redirect_uri: redirectUri,
-              slot,
-              ...(serverId ? { server_id: serverId } : {}),
-            }),
-          });
+          const tokenRes = await exchangeOAuthCode({ serverUrl, code, codeVerifier, redirectUri, slot, serverId });
 
           if (!tokenRes.ok) {
             throw new Error('token_exchange_failed');
           }
+          if (IS_LITE) unnamedLiteSlot = slot;
 
           const { access_token, expires_in } = await tokenRes.json();
 
@@ -1036,6 +1247,10 @@ export const useAuthStore = create<AuthState>()(
           // preferred_username claim rather than the real email address.
           // Prefer the email from the primary identity when available.
           const username = primaryIdentity?.email || jmapUsername;
+          if (IS_LITE) {
+            nameLiteRefreshToken(slot, username);
+            unnamedLiteSlot = null;
+          }
           initializeFeatureStores(client);
 
           // Register in account store
@@ -1120,6 +1335,9 @@ export const useAuthStore = create<AuthState>()(
           return true;
         } catch (error) {
           debug.error('OAuth login error:', error);
+          // The code was redeemed but the session never came up: nothing owns
+          // the refresh token the exchange stored.
+          if (unnamedLiteSlot !== null) clearLiteRefreshToken(unnamedLiteSlot);
           const errorMsg = error instanceof Error ? error.message : 'generic';
           notifyParent('sso:auth-failure', { error: errorMsg });
           set({
@@ -1285,8 +1503,7 @@ export const useAuthStore = create<AuthState>()(
             // the current token is unusable (rejected by JMAP, or due for
             // scheduled renewal), so the server-side cache must be skipped.
             // Session restore passes allowCached to reuse a still-valid token.
-            const force = options?.allowCached ? '' : '&force=true';
-            const res = await apiFetch(`/api/auth/token?slot=${slot}${force}`, { method: 'PUT' });
+            const res = await fetchSlotAccessToken(slot, { force: !options?.allowCached });
 
             if (!res.ok) {
               // Only a definitive 401 ends the session. Anything else (5xx
@@ -1460,10 +1677,7 @@ export const useAuthStore = create<AuthState>()(
           }
 
           // Background cookie cleanup for the removed account
-          apiFetch(`/api/auth/session?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-          if (wasOAuth) {
-            apiFetch(`/api/auth/token?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-          }
+          discardSlotCredentials(slot, wasOAuth, true);
           return;
         }
 
@@ -1474,10 +1688,7 @@ export const useAuthStore = create<AuthState>()(
 
         // Background cookie/token cleanup - keepalive ensures completion during navigation
         if (!wasDemoMode) {
-          apiFetch(`/api/auth/session?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-          if (wasOAuth) {
-            apiFetch(`/api/auth/token?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-          }
+          discardSlotCredentials(slot, wasOAuth, true);
         }
 
         // Redirect to login - this is synchronous and happens AFTER all state is cleared
@@ -1513,10 +1724,7 @@ export const useAuthStore = create<AuthState>()(
             body: JSON.stringify({ slot }),
           }).catch(() => {});
         }
-        apiFetch(`/api/auth/session?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-        if (wasOAuth) {
-          apiFetch(`/api/auth/token?slot=${slot}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-        }
+        discardSlotCredentials(slot, wasOAuth, true);
       },
 
       logoutAll: async () => {
@@ -1559,8 +1767,7 @@ export const useAuthStore = create<AuthState>()(
         });
 
         // Background cookie/token cleanup
-        apiFetch('/api/auth/session?all=true', { method: 'DELETE', keepalive: true }).catch(() => {});
-        apiFetch('/api/auth/token?all=true', { method: 'DELETE', keepalive: true }).catch(() => {});
+        discardAllCredentials();
 
         redirectToLogin();
       },
@@ -1601,7 +1808,7 @@ export const useAuthStore = create<AuthState>()(
           // Client not connected - try to restore
           try {
             if (targetAccount.authMode === 'oauth') {
-              const res = await apiFetch(`/api/auth/token?slot=${targetAccount.cookieSlot}`, { method: 'PUT' });
+              const res = await fetchSlotAccessToken(targetAccount.cookieSlot);
               if (res.ok) {
                 const { access_token, expires_in } = await res.json();
                 const refreshFn = get().refreshAccessToken;
@@ -1627,7 +1834,7 @@ export const useAuthStore = create<AuthState>()(
               await targetClient.connect();
               clients.set(accountId, targetClient);
             } else if (targetAccount.authMode === 'basic' && targetAccount.rememberMe) {
-              const res = await apiFetch(`/api/auth/session?slot=${targetAccount.cookieSlot}`, { method: 'PUT' });
+              const res = await fetchSlotSession(targetAccount.cookieSlot);
               if (res.ok) {
                 const { serverUrl, username, password } = await res.json();
                 targetClient = new JMAPClient(serverUrl, username, password);
@@ -1676,7 +1883,7 @@ export const useAuthStore = create<AuthState>()(
           // Cannot restore - remove the stale account and redirect to login
           evictAccount(accountId);
           accountStore.removeAccount(accountId);
-          apiFetch(`/api/auth/session?slot=${targetAccount.cookieSlot}`, { method: 'DELETE' }).catch(() => {});
+          discardSlotCredentials(targetAccount.cookieSlot, false);
 
           // Restore the previous account if still available
           if (state.activeAccountId && state.activeAccountId !== accountId) {
@@ -1723,8 +1930,7 @@ export const useAuthStore = create<AuthState>()(
           debug.error(`switchAccount: slot ${targetAccount.cookieSlot} for ${accountId} resolved to [${connectedCandidates.join(", ")}] — forcing re-auth`);
           clients.delete(accountId);
           try { targetClient.disconnect(); } catch { /* noop */ }
-          apiFetch(`/api/auth/token?slot=${targetAccount.cookieSlot}`, { method: 'DELETE' }).catch(() => {});
-          apiFetch(`/api/auth/session?slot=${targetAccount.cookieSlot}`, { method: 'DELETE' }).catch(() => {});
+          discardSlotCredentials(targetAccount.cookieSlot, true);
           accountStore.updateAccount(accountId, { isConnected: false, hasError: true, errorMessage: 'session_mismatch' });
           set({ isLoading: false, error: 'connection_failed', activeAccountId: state.activeAccountId });
           replaceWindowLocation(getLocaleLoginPath());
@@ -1812,7 +2018,8 @@ export const useAuthStore = create<AuthState>()(
         // or by another server-side hand-off), promote it into the account
         // registry so the normal restoration path picks it up. Without this
         // the cookies sit unused and the SPA bounces to the login screen.
-        if (accounts.length === 0) {
+        // (Not in Lite: nothing hands sessions over server-side.)
+        if (accounts.length === 0 && !IS_LITE) {
           try {
             const restore = await apiFetch('/api/auth/session', { method: 'PUT' });
             if (restore.ok) {
@@ -1868,7 +2075,9 @@ export const useAuthStore = create<AuthState>()(
             // Basic auth without rememberMe leaves nothing to restore - the
             // user logged in without persisting credentials. Evict silently
             // so the login screen is shown without flagging a fake error.
-            if (account.authMode === 'basic' && !account.rememberMe) {
+            // (Lite keeps a tab-scoped Basic session either way; a missing one
+            // surfaces as a 401 from fetchSlotSession below and evicts too.)
+            if (account.authMode === 'basic' && !account.rememberMe && !IS_LITE) {
               evictAccount(account.id);
               accountStore.removeAccount(account.id);
               return;
@@ -1876,7 +2085,7 @@ export const useAuthStore = create<AuthState>()(
 
             try {
               if (account.authMode === 'oauth') {
-                const res = await apiFetch(`/api/auth/token?slot=${account.cookieSlot}`, { method: 'PUT' });
+                const res = await fetchSlotAccessToken(account.cookieSlot);
                 if (res.ok) {
                   const { access_token, expires_in } = await res.json();
                   const refreshFn = get().refreshAccessToken;
@@ -1909,7 +2118,7 @@ export const useAuthStore = create<AuthState>()(
                 accountStore.updateAccount(account.id, { isConnected: true, hasError: false });
                 void syncAccountDisplayName(account.id, client);
               } else {
-                const res = await apiFetch(`/api/auth/session?slot=${account.cookieSlot}`, { method: 'PUT' });
+                const res = await fetchSlotSession(account.cookieSlot);
                 if (res.ok) {
                   const { serverUrl, username, password } = await res.json();
                   const client = new JMAPClient(serverUrl, username, password);
@@ -1952,7 +2161,7 @@ export const useAuthStore = create<AuthState>()(
               // again rather than seeing a stale error entry forever.
               evictAccount(account.id);
               accountStore.removeAccount(account.id);
-              apiFetch(`/api/auth/session?slot=${account.cookieSlot}`, { method: 'DELETE' }).catch(() => {});
+              discardSlotCredentials(account.cookieSlot, false);
             }
           };
 
@@ -2154,7 +2363,7 @@ export const useAuthStore = create<AuthState>()(
           if (state.authMode === 'basic') {
             set({ isLoading: true, isRateLimited: false, rateLimitUntil: null });
             try {
-              const res = await apiFetch('/api/auth/session', { method: 'PUT' });
+              const res = await fetchSlotSession();
               if (res.ok) {
                 const data = await res.json();
                 if (!data.serverUrl || !data.username || !data.password) {

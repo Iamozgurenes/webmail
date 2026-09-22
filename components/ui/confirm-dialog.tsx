@@ -4,7 +4,7 @@ import { useEffect, useId } from "react";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 interface ConfirmDialogProps {

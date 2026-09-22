@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Save, Loader2, RotateCcw, Sparkles } from 'lucide-react';
+import { Save, Loader2, RotateCcw, Sparkles } from '@/components/icons';
 import { apiFetch } from '@/lib/browser-navigation';
 
 interface ConfigEntry {

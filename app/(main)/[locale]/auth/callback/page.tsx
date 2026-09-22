@@ -6,7 +6,8 @@ import { useTranslations } from "next-intl";
 import { useAuthStore } from "@/stores/auth-store";
 import { apiFetch, getPathPrefix, toRouterPath } from "@/lib/browser-navigation";
 import { buildSettingsPath } from "@/lib/deep-links";
-import { Loader2, AlertCircle } from "lucide-react";
+import { LITE_OAUTH_AVAILABLE, getLiteOAuthRedirectUri } from "@/lib/auth/lite-oauth";
+import { Loader2, AlertCircle } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useParams } from "next/navigation";
 
@@ -90,7 +91,11 @@ function OAuthCallbackInner() {
       }
 
       const prefix = getPathPrefix(params.locale as string);
-      const redirectUri = `${window.location.origin}${prefix}/${params.locale}/auth/callback`;
+      // Lite on Stalwart registers one locale-free URI (lib/auth/lite-oauth.ts);
+      // the entry document brought us here from it.
+      const redirectUri = LITE_OAUTH_AVAILABLE
+        ? getLiteOAuthRedirectUri()
+        : `${window.location.origin}${prefix}/${params.locale}/auth/callback`;
 
       loginWithOAuth(serverUrl, code, codeVerifier, redirectUri, serverId)
         .then((success) => {

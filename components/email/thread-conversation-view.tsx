@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
 import { Email, ThreadGroup } from "@/lib/jmap/types";
 import { EMAIL_SANITIZE_CONFIG, collapseBlockedImageContainers, plainTextToSafeHtml, restrictDataUriResourcesOnNode, sanitizePlainTextRenderedHtml } from "@/lib/email-sanitization";
 import { getRenderableHtmlBody } from "@/lib/email-body-selection";
+import { collectReferencedCids, isEmbeddedInBody } from "@/lib/attachment-visibility";
 import { collapsePlainTextQuotes, setupQuoteCollapse } from "@/lib/quote-collapse";
 import { fitEmailBodyWidth } from "@/lib/email-fit-width";
 import { transformInlineStyles, transformColorForDarkMode, transformBgColorForDarkMode } from "@/lib/color-transform";
@@ -30,12 +31,12 @@ import {
   FileArchive,
   File,
   Eye,
-} from "lucide-react";
+} from "@/components/icons";
 import { useTranslations } from "next-intl";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useContactStore } from "@/stores/contact-store";
 import { useAuthStore } from "@/stores/auth-store";
-import { isFilePreviewable } from "@/lib/file-preview";
+import { isFilePreviewable, toInertBlob } from "@/lib/file-preview";
 
 interface ThreadConversationViewProps {
   thread: ThreadGroup;
@@ -298,7 +299,9 @@ function EmailCard({
       await Promise.all(cidAttachments.map(async (att) => {
         const cidValue = att.cid!.replace(/^<|>$/g, '');
         try {
-          const objectUrl = await client!.fetchBlobAsObjectUrl(att.blobId, att.name || 'inline', att.type);
+          // Re-type sender-declared script-bearing parts before they become a
+          // blob: URL in our origin (GHSA-xvjh-v9c6-qcvc).
+          const objectUrl = URL.createObjectURL(toInertBlob(await client!.fetchBlob(att.blobId, att.name || 'inline', att.type)));
           if (!cancelled) {
             urls[cidValue] = objectUrl;
             objectUrls.push(objectUrl);
@@ -436,6 +439,16 @@ function EmailCard({
     return { html: "", isHtml: false };
   }, [email, allowExternal, resolvedTheme, emailAlwaysLightMode, cidBlobUrls, t]);
 
+  // Parts the body embeds via cid: stay out of the attachment row while the
+  // user hides inline images - the desktop viewer's rule, shared through
+  // lib/attachment-visibility.ts so the two views cannot drift apart.
+  const visibleAttachments = useMemo(() => {
+    const attachments = email.attachments ?? [];
+    if (!hideInlineImageAttachments) return attachments;
+    const bodyCids = collectReferencedCids(getRenderableHtmlBody(email));
+    return attachments.filter(att => !isEmbeddedInBody(att, bodyCids));
+  }, [email, hideInlineImageAttachments]);
+
   // Render the sanitized HTML body inside a sandboxed iframe so a malicious
   // (or accidentally-bypassed) email cannot inject styles/scripts/forms into
   // the host page. CSP <meta> is defense-in-depth in case the sanitizer ever
@@ -455,7 +468,15 @@ function EmailCard({
      only left for content too wide to stay legible when scaled. */
   html { overflow: hidden; }
   body { overflow-x: auto; overflow-y: hidden; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #1a1a1a; background: #ffffff; word-wrap: break-word; overflow-wrap: break-word; }
-  img { max-width: 100% !important; height: auto !important; }
+  /* Only force the cap on images that set no width of their own: an
+     !important 100% also overrides a sender's inline max-width, and an
+     image sized by max-width + max-height + width:100% then grows to
+     the pane width while its max-height still clamps the height - the
+     picture renders stretched. Same reasoning as the table rule below (#790).
+     height stays !important so a fixed inline height cannot squash it. */
+  img:not([style*="max-width"]) { max-width: 100% !important; }
+  img[style*="max-width"] { max-width: 100%; }
+  img { height: auto !important; }
   a { color: #1a73e8; }
   /* Only force the cap on tables that set no width of their own: an
      !important 100% would also override a newsletter's inline
@@ -621,11 +642,7 @@ function EmailCard({
           </div>
 
           {/* Attachments */}
-          {(() => {
-            const visibleAttachments = (email.attachments ?? []).filter(
-              att => !(hideInlineImageAttachments && att.cid && att.disposition === 'inline' && (att.type || '').startsWith('image/'))
-            );
-            return visibleAttachments.length > 0 && (
+          {visibleAttachments.length > 0 && (
             <div className="px-4 pb-4">
               <div className="flex flex-wrap gap-2">
                 {visibleAttachments.map((attachment, idx) => {
@@ -657,8 +674,7 @@ function EmailCard({
                 })}
               </div>
             </div>
-            );
-          })()}
+          )}
 
           {/* Action Buttons */}
           <div className="px-4 pb-4 flex gap-2">

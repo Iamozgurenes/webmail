@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type TouchEvent as ReactTouchEvent } from "react";
 import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
-import { Plus } from "lucide-react";
+import { Plus } from "@/components/icons";
 import {
   addMonths, subMonths, addWeeks, subWeeks, addDays, subDays,
   format, parseISO,
@@ -15,10 +15,10 @@ import { useEmailStore } from "@/stores/email-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useIdentityStore } from "@/stores/identity-store";
 import { useAccountStore } from "@/stores/account-store";
-import { useAccountSecurityStore } from "@/stores/account-security-store";
 import { usePolicyStore } from "@/stores/policy-store";
 import { toast } from "@/stores/toast-store";
 import { useIsDesktop, useIsMobile } from "@/hooks/use-media-query";
+import { useAccountPrincipalEmails } from "@/hooks/use-account-principal-emails";
 import { Button } from "@/components/ui/button";
 import { CalendarToolbar } from "@/components/calendar/calendar-toolbar";
 import { CalendarMonthView } from "@/components/calendar/calendar-month-view";
@@ -80,6 +80,7 @@ import {
   scrollWindowContains, type CalendarFocus, type ScrollViewMode, type ScrollWindowOptions,
   type ScrollWindowState, type ScrollWindowViewProps,
 } from "@/lib/calendar-scroll-window";
+import { useLiteLinkSegments } from "@/hooks/use-lite-link-segments";
 
 type PendingScopeAction =
   | { type: "edit"; event: CalendarEvent; updates: Partial<CalendarEvent>; sendScheduling?: boolean }
@@ -94,7 +95,9 @@ export interface CalendarAppProps {
   linkSegments?: string[];
 }
 
-export function CalendarApp({ linkSegments }: CalendarAppProps = {}) {
+export function CalendarApp({ linkSegments: routeSegments }: CalendarAppProps = {}) {
+  // Static Lite build: the route params are empty, read the link from the URL.
+  const linkSegments = useLiteLinkSegments('calendar', routeSegments);
   const router = useRouter();
   const t = useTranslations("calendar");
   const tWebcalAction = useTranslations("calendar.webcal_action");
@@ -130,17 +133,9 @@ export function CalendarApp({ linkSegments }: CalendarAppProps = {}) {
   const contacts = useContactStore((s) => s.contacts);
   const normalizedViewMode = isCalendarViewMode(viewMode) ? viewMode : "month";
 
-  // Aliases live on the principal, not on identities; fetch them so an
-  // alias-organized event is recognised as the user's own (see isOrganizer).
-  const accountEmails = useAccountSecurityStore((s) => s.emails);
-  const fetchPrincipal = useAccountSecurityStore((s) => s.fetchPrincipal);
-  const principalFetchedRef = useRef(false);
-  useEffect(() => {
-    if (principalFetchedRef.current) return;
-    principalFetchedRef.current = true;
-    if (accountEmails.length > 0) return; // already loaded elsewhere
-    void fetchPrincipal();
-  }, [accountEmails, fetchPrincipal]);
+  // Aliases live on the principal, not on identities; the calendar needs them
+  // so an alias-organized event is recognised as the user's own (see isOrganizer).
+  const accountEmails = useAccountPrincipalEmails(client);
 
   // The default ParticipantIdentity (draft-ietf-jmap-calendars §6) is the
   // address new invitations are organised from, so it goes first: the event
@@ -543,6 +538,18 @@ export function CalendarApp({ linkSegments }: CalendarAppProps = {}) {
     // Close the narrow-pane sidebar overlay after the user picks a date.
     setNarrowSidebarOpen(false);
   }, [setSelectedDate, jumpTo, isMobile, normalizedViewMode, setViewMode]);
+
+  // The mini calendar is a navigation control: unlike a click in the week or
+  // month grid, which marks a day that is already on screen, picking a day
+  // here has to bring that day into view.
+  const handleMiniCalendarSelect = useCallback((date: Date) => {
+    jumpTo(date);
+    if (isMobile && normalizedViewMode === "month") {
+      setMobileReturnToMonth(true);
+      setViewMode("day");
+    }
+    setNarrowSidebarOpen(false);
+  }, [jumpTo, isMobile, normalizedViewMode, setViewMode]);
 
   const navigateBackToMonth = useCallback(() => {
     setMobileReturnToMonth(false);
@@ -1559,7 +1566,7 @@ export function CalendarApp({ linkSegments }: CalendarAppProps = {}) {
             <MiniCalendar
               selectedDate={selectedDate}
               displayMonth={miniMonth}
-              onSelectDate={handleSelectDate}
+              onSelectDate={handleMiniCalendarSelect}
               onChangeMonth={handleMiniMonthChange}
               events={events}
               firstDayOfWeek={firstDayOfWeek}

@@ -26,7 +26,7 @@ import {
   RotateCcw,
   PalmtreeIcon,
   Lock,
-} from "lucide-react";
+} from "@/components/icons";
 
 function isReadonlyRule(r: FilterRule): boolean {
   return r.origin === "external" || r.origin === "opaque";

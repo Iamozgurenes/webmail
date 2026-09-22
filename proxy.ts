@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import createIntlMiddleware from "next-intl/middleware";
 import { routing } from "./i18n/routing";
 import { localeFromAcceptLanguage } from "./i18n/locale-matcher";
+import { isSameOriginRequest } from "./lib/security/same-origin";
 import { getEnabledPluginFrameOrigins } from "./lib/admin/csp-frame-origins";
 import {
   APP_FRAME_ORIGINS_COOKIE,
@@ -50,7 +51,21 @@ function withMatchedChineseAcceptLanguage(request: NextRequest): NextRequest {
 // (e.g. `export const config = { matcher }`) is no longer allowed in the
 // proxy file. We replicate the previous matcher inline by short-circuiting
 // requests for API routes, Next internals and static assets.
-const PROXY_SKIP_PATTERN = /^\/(?:api|_next)(?:\/|$)|\.[^/]+$/;
+const PROXY_SKIP_PATTERN = /^\/(?:api|_next)(?:\/|$)/;
+
+// What Next serves from public/: a single dotted segment at the root
+// (/sw.js, /favicon.ico, /manifest.webmanifest) and the branding/ and
+// notification/ asset folders. The upstream matcher treated EVERY path whose
+// last segment has a dot as a static file, but the [[...segments]] catch-alls
+// under /<locale>/mail, /calendar, /contacts and /files make
+// /en/mail/folder/inbox/statement.pdf a real signed-in page, and it rendered
+// without a CSP or any other security header (GHSA-xvjh-v9c6-qcvc). Only what
+// is genuinely static may skip locale routing and the headers.
+const STATIC_ASSET_PATTERN = /^\/[^/]+\.[^/]+$|^\/(?:branding|notification)\//;
+
+export function isStaticAssetPath(pathname: string): boolean {
+  return STATIC_ASSET_PATTERN.test(pathname);
+}
 
 /**
  * Hand the route every request header the client sent, plus `extra`.
@@ -62,7 +77,7 @@ const PROXY_SKIP_PATTERN = /^\/(?:api|_next)(?:\/|$)|\.[^/]+$/;
  * Next-Url, Cookie, Accept-Language, ... from every page request that skips
  * the intl middleware: all locale-prefixed paths - i.e. every page of a
  * NEXT_PUBLIC_LOCALE_PREFIX=always (Docker) build - plus /admin, /protocol,
- * /setup and the plugin sandbox. Since Next 16.3 the server recomputes the
+ * /setup, /connector and the plugin sandbox. Since Next 16.3 the server recomputes the
  * `_rsc` cache-busting hash from those router headers
  * (experimental.validateRSCRequestHeaders, on by default) and answers a
  * mismatch with a 307 to the "expected" URL; the client re-requests, the
@@ -127,7 +142,7 @@ export async function proxy(request: NextRequest) {
       // Public read endpoint - serves wizard-uploaded branding assets so
       // image previews work during the wizard. No auth on the GET route.
       pathname.startsWith("/api/admin/branding/") ||
-      /\.[^/]+$/.test(pathname);
+      isStaticAssetPath(pathname);
 
     if (!allowed) {
       if (pathname.startsWith("/api/")) {
@@ -155,7 +170,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (PROXY_SKIP_PATTERN.test(pathname)) {
+  // Outer CSRF gate for the unauthenticated auth routes (GHSA-qvr9-m8cq-7wvg).
+  // Each handler checks this itself as well; this layer covers any route
+  // added under /api/auth/ later. GET/HEAD/OPTIONS pass through untouched.
+  if (pathname.startsWith("/api/auth/") && !isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
+  }
+
+  if (PROXY_SKIP_PATTERN.test(pathname) || isStaticAssetPath(pathname)) {
     return NextResponse.next();
   }
 
@@ -173,6 +195,25 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/plugin-sandbox/") ||
     pathname === "/plugin-sandbox-privileged" ||
     pathname.startsWith("/plugin-sandbox-privileged/");
+
+  // The sandbox routes are only ever loaded as iframes by the host bridge.
+  // Refuse them as a top-level document (window.open() from another site, a
+  // typed URL): the browser sets `Sec-Fetch-Dest` and page script cannot
+  // forge it; browsers without it fall through to the runtime's own host gate.
+  // They also disappear entirely while the plugin feature is off, so a stock
+  // install never serves a document carrying 'unsafe-eval'
+  // (GHSA-96cx-gx36-3g79). Other destinations pass - `iframe` for the bridge,
+  // `empty` for the router's own RSC refetches - and cross-site framing is
+  // already blocked by the `frame-ancestors 'self'` below.
+  if (isSandboxPath) {
+    const pluginsEnabled = configManager.getPolicy().features?.pluginsEnabled === true;
+    if (!pluginsEnabled || request.headers.get("sec-fetch-dest") === "document") {
+      return new NextResponse("The plugin sandbox is only served inside the webmail.", {
+        status: 403,
+        headers: { "content-type": "text/plain" },
+      });
+    }
+  }
 
   const scriptSrc = isSandboxPath
     ? `'self' 'nonce-${nonce}' 'unsafe-eval'`
@@ -250,6 +291,10 @@ export async function proxy(request: NextRequest) {
   const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
   const isProtocolRoute = pathname === '/protocol' || pathname.startsWith('/protocol/');
   const isSetupRoute = pathname === '/setup' || pathname.startsWith('/setup/');
+  // Connector links (/connector/<target>) are published in docs and READMEs
+  // and must not carry a locale. Letting next-intl rewrite them to
+  // /en/connector/... 404s, which breaks every link already in the wild.
+  const isConnectorRoute = pathname === '/connector' || pathname.startsWith('/connector/');
   // The plugin sandbox lives in its own root layout under app/(sandbox)/ and
   // is not part of the localized tree. Letting next-intl rewrite the path to
   // /en/plugin-sandbox 404s, which kills the iframe and disables every plugin.
@@ -264,7 +309,14 @@ export async function proxy(request: NextRequest) {
   );
 
   let intlResponse: ReturnType<typeof intlMiddleware> | null = null;
-  if (!isAdminRoute && !isProtocolRoute && !isSetupRoute && !isSandboxRoute && !hasLocalePrefix) {
+  if (
+    !isAdminRoute &&
+    !isProtocolRoute &&
+    !isSetupRoute &&
+    !isSandboxRoute &&
+    !isConnectorRoute &&
+    !hasLocalePrefix
+  ) {
     try {
       intlResponse = intlMiddleware(withMatchedChineseAcceptLanguage(request));
     } catch (error) {

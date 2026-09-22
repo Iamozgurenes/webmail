@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2 } from "@/components/icons";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { toast } from "@/stores/toast-store";
 import type {

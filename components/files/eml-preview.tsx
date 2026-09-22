@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Paperclip, Download } from "lucide-react";
+import { Paperclip, Download } from "@/components/icons";
 import { sanitizeEmailHtmlForIframe } from "@/lib/email-sanitization";
 import { getEffectiveTimeZone } from "@/lib/timezone";
 

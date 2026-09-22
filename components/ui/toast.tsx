@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { X, Check, AlertCircle, Info, AlertTriangle } from "lucide-react";
+import { X, Check, AlertCircle, Info, AlertTriangle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 export type ToastType = "success" | "error" | "info" | "warning";

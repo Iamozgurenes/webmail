@@ -35,8 +35,8 @@ import {
   SwatchBook,
   Download,
   X,
-  type LucideIcon,
-} from 'lucide-react';
+  type AppIcon,
+} from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AppearanceSettings } from '@/components/settings/appearance-settings';
@@ -89,6 +89,7 @@ import { useIsEmbedded } from '@/hooks/use-is-embedded';
 import { useIsFocusedProTab } from '@/hooks/use-pane-context';
 import { ResizeHandle } from '@/components/layout/resize-handle';
 import { useConfig } from '@/hooks/use-config';
+import { IS_LITE } from '@/lib/lite';
 import { usePolicyStore } from '@/stores/policy-store';
 import { cn } from '@/lib/utils';
 import {
@@ -100,6 +101,7 @@ import {
   tabKeywords,
   tabSearchPaths,
 } from '@/lib/settings-search';
+import { useLiteLinkSegments } from '@/hooks/use-lite-link-segments';
 
 type Tab = SettingsSearchTab;
 
@@ -114,11 +116,11 @@ type SettingsTabId = Tab | PluginTabId;
 interface TabDef {
   id: SettingsTabId;
   label: string;
-  icon: LucideIcon;
+  icon: AppIcon;
   group: TabGroup;
 }
 
-const tabIcons: Record<Tab, LucideIcon> = {
+const tabIcons: Record<Tab, AppIcon> = {
   account: User,
   language: Languages,
   notifications: Bell,
@@ -209,7 +211,9 @@ export interface SettingsAppProps {
   linkSegments?: string[];
 }
 
-export function SettingsApp({ linkSegments }: SettingsAppProps = {}) {
+export function SettingsApp({ linkSegments: routeSegments }: SettingsAppProps = {}) {
+  // Static Lite build: the route params are empty, read the link from the URL.
+  const linkSegments = useLiteLinkSegments('settings', routeSegments);
   const router = useRouter();
   const t = useTranslations('settings');
   const tSidebar = useTranslations('sidebar');
@@ -532,7 +536,8 @@ export function SettingsApp({ linkSegments }: SettingsAppProps = {}) {
     { id: 'account', label: t('tabs.account'), icon: tabIcons.account, group: 'general' },
     { id: 'language', label: t('tabs.language'), icon: tabIcons.language, group: 'general' },
     { id: 'notifications', label: t('tabs.notifications'), icon: tabIcons.notifications, group: 'general' },
-    { id: 'protocol_handlers', label: t('tabs.protocol_handlers'), icon: tabIcons.protocol_handlers, group: 'general' },
+    // The handler URLs point at /protocol/*, server routes the static Lite export does not ship.
+    ...(IS_LITE ? [] : [{ id: 'protocol_handlers' as Tab, label: t('tabs.protocol_handlers'), icon: tabIcons.protocol_handlers, group: 'general' as TabGroup }]),
 
     // Appearance
     { id: 'appearance', label: t('tabs.appearance'), icon: tabIcons.appearance, group: 'appearance' },

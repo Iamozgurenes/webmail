@@ -36,7 +36,7 @@ import {
   Mails,
   MailOpen,
   MoreHorizontal,
-} from "lucide-react";
+} from "@/components/icons";
 import { cn, buildMailboxTree, MailboxNode } from "@/lib/utils";
 import { localizeMailboxName } from "@/lib/mailbox-label";
 import {

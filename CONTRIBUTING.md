@@ -85,7 +85,6 @@ These checks run automatically on commit via Husky pre-commit hooks.
 | **Unit**         | `npx vitest run`           | Vitest + jsdom. Tests live in `__tests__/` folders next to the code |
 | **Translations** | `npm run test:translations` | Locale files checked for structural drift against English           |
 | **Integration**  | `npm run test:integration`  | Playwright against a real Stalwart server in Docker                 |
-| **E2E smoke**    | `npx playwright test`      | UI smoke tests against `npm run dev`                                |
 
 Run a single unit test file with `npx vitest run lib/__tests__/<name>.test.ts`, or `npx vitest` to watch.
 
@@ -240,7 +239,6 @@ webmail/
 ├── locales/                  # Translation files, one directory per locale
 ├── stores/                   # Zustand state stores
 ├── public/                   # Static assets and branding
-├── e2e/                      # Playwright smoke tests (against `npm run dev`)
 └── integration/              # Dockerized Stalwart + Playwright suite
 ```
 

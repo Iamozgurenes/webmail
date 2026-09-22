@@ -688,7 +688,11 @@ export interface MessageListTab {
    * `hasKeyword`. Use for durable, Sieve-assigned categories.
    */
   keyword?: string | null;
-  /** Lucide icon name rendered before the label (optional). */
+  /**
+   * Icon rendered before the label (optional): a Tabler Icons name such as
+   * `"inbox"` or `"tabler:inbox"`. Lucide names (`"Inbox"`) from older plugins
+   * are still accepted and translated.
+   */
   icon?: string;
   /** CSS color for the active-tab indicator / badge accent (optional). */
   color?: string;

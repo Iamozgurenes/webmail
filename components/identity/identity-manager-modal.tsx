@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Mail, Pencil, Trash2, Plus, AlertTriangle, Star } from 'lucide-react';
+import { X, Mail, Pencil, Trash2, Plus, AlertTriangle, Star } from '@/components/icons';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';

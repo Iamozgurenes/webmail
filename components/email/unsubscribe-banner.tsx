@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { Loader2, CheckCircle, AlertCircle } from '@/components/icons';
 import { useTranslations } from 'next-intl';
 import { isValidUnsubscribeUrl, parseMailtoUrl } from '@/lib/validation';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';

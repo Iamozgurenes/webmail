@@ -204,6 +204,9 @@ const EMAIL_LIST_PROPERTIES = [
   "subject",
   "preview",
   "hasAttachment",
+  // Attachment metadata (name / type / blobId) so list rows can offer the
+  // files directly. hasAttachment alone only supports a paperclip icon.
+  "attachments",
   // Needed so list rows can serve drag-out to the file system as .eml.
   "blobId",
 ] as const;
@@ -356,7 +359,6 @@ const CALENDAR_TASK_PROPERTIES = [
   'utcStart',
   'utcEnd',
   'progress',
-  'progressUpdated',
   'priority',
   'privacy',
   'color',
@@ -370,6 +372,26 @@ const CALENDAR_TASK_PROPERTIES = [
   'relatedTo',
   'percentComplete',  // Task-only per RFC 8984 §5.2.4 - used in detection heuristic
 ] as const;
+
+const TASK_PROGRESS_NORMALIZATION = new Map<string, CalendarTask['progress']>([
+  ['needs-action', 'needs-action'],
+  ['needs_action', 'needs-action'],
+  ['in-process', 'in-process'],
+  ['in_process', 'in-process'],
+  ['completed', 'completed'],
+  ['cancelled', 'cancelled'],
+  ['canceled', 'cancelled'],
+]);
+
+function normalizeCalendarTask(task: CalendarTask): CalendarTask {
+  const progress = task.progress as unknown;
+  if (typeof progress !== 'string') return task;
+
+  const normalizedProgress = TASK_PROGRESS_NORMALIZATION.get(progress.toLowerCase());
+  return normalizedProgress === undefined
+    ? task
+    : { ...task, progress: normalizedProgress };
+}
 
 /**
  * IANA time zone of the user - their `timeZone` setting when set (#755),
@@ -484,6 +506,11 @@ export function isConcurrentRequestRefusal(status: number, body: string): boolea
 
 /** Base back-off per attempt when the server refuses a request for being one too many in parallel. */
 const CONCURRENT_REQUEST_RETRY_DELAYS_MS = [200, 400, 800];
+
+/** Ids asked for per FileNode/query page; Stalwart clamps it to queryMaxResults (5000 by default). */
+const FILE_NODE_QUERY_PAGE = 5000;
+/** Safety bound on how many FileNode ids one listing pages through. */
+const FILE_NODE_MAX_IDS = 200_000;
 
 function computeHasMore(position: number, emailCount: number, total: number, limit: number): boolean {
   if (total > 0) return (position + emailCount) < total;
@@ -1740,9 +1767,10 @@ export class JMAPClient implements IJMAPClient {
     return allEmails;
   }
 
-  async getTagCounts(tagIds: string[]): Promise<Record<string, { total: number; unread: number }>> {
+  async getTagCounts(tagIds: string[], accountId?: string): Promise<Record<string, { total: number; unread: number }>> {
     if (tagIds.length === 0) return {};
     const result: Record<string, { total: number; unread: number }> = {};
+    const targetAccountId = accountId || this.accountId;
 
     const CALLS_PER_TAG = 2;
     const perRequest = itemsPerRequest(this.getMaxCallsInRequest(), CALLS_PER_TAG);
@@ -1754,14 +1782,14 @@ export class JMAPClient implements IJMAPClient {
           const keyword = `$label:${batch[i]}`;
           // Total count for this tag
           methodCalls.push(["Email/query", {
-            accountId: this.accountId,
+            accountId: targetAccountId,
             filter: { hasKeyword: keyword },
             limit: 0,
             calculateTotal: true,
           }, `total_${i}`]);
           // Unread count for this tag
           methodCalls.push(["Email/query", {
-            accountId: this.accountId,
+            accountId: targetAccountId,
             filter: {
               operator: "AND",
               conditions: [
@@ -6660,7 +6688,7 @@ export class JMAPClient implements IJMAPClient {
     const accountId = targetAccountId || this.getCalendarsAccountId();
 
     // Strip client-only and server-immutable fields before sending to JMAP
-    const { id: _id, uid: _uid, '@type': _typ, created: _cr, updated: _up, sequence: _sq, isOrigin: _io, isDraft: _idr, originalId: _oi, baseEventId: _be, originalCalendarIds: _oc, accountId: _ai, accountName: _an, isShared: _is, ...cleanUpdates } = updates as CalendarEvent;
+    const { id: _id, uid: _uid, '@type': _typ, created: _cr, updated: _up, sequence: _sq, isOrigin: _io, isDraft: _idr, originalId: _oi, baseEventId: _be, originalCalendarIds: _oc, accountId: _ai, accountName: _an, isShared: _is, progressUpdated: _pu, ...cleanUpdates } = updates as CalendarEvent & { progressUpdated?: string | null };
     cleanRecurrenceRules(cleanUpdates as unknown as Record<string, unknown>);
 
     const setArgs: Record<string, unknown> = {
@@ -6929,7 +6957,7 @@ export class JMAPClient implements IJMAPClient {
 
         if (!isExplicitTask && !isCalDavTask) continue;
 
-        tasks.push({ ...obj, '@type': 'Task' as const } as CalendarTask);
+        tasks.push(normalizeCalendarTask({ ...obj, '@type': 'Task' as const } as CalendarTask));
       }
 
       debug.log('tasks', 'CalendarTask/fetch complete,', tasks.length, 'tasks of', allObjects.length, 'objects');
@@ -6944,7 +6972,7 @@ export class JMAPClient implements IJMAPClient {
 
   async createCalendarTask(task: Partial<CalendarTask>, targetAccountId?: string): Promise<CalendarTask> {
     const accountId = targetAccountId || this.getCalendarsAccountId();
-    const { '@type': _type, ...taskData } = task;
+    const { '@type': _type, progressUpdated: _pu, ...taskData } = task as Partial<CalendarTask> & { progressUpdated?: string | null };
     const cleanTask = { ...taskData, '@type': 'Task' };
 
     debug.group('CalendarTask/create', 'tasks');
@@ -6996,7 +7024,7 @@ export class JMAPClient implements IJMAPClient {
       const notFound = getResponse.methodResponses[0][1].notFound || [];
       debug.log('calendar', 'CalendarTask/create get response', { found: list.length, notFound });
       if (list[0]) {
-        const created = { ...list[0], '@type': 'Task' as const } as CalendarTask;
+        const created = normalizeCalendarTask({ ...list[0], '@type': 'Task' as const } as CalendarTask);
         debug.log('tasks', 'CalendarTask/create final task object', {
           id: created.id,
           uid: created.uid,
@@ -7149,8 +7177,8 @@ export class JMAPClient implements IJMAPClient {
   }
 
   async listFileNodes(parentId: string | null): Promise<FileNode[]> {
-    // FileNode/query omits folder nodes in Stalwart (see listAllFileNodes), so
-    // we enumerate the whole account and filter children client-side.
+    // FileNode/query omits folder nodes on older Stalwart (see listAllFileNodes),
+    // so we enumerate the whole account and filter children client-side.
     const all = await this.listAllFileNodes();
     return all.filter(n => (n.parentId ?? null) === parentId);
   }
@@ -7159,17 +7187,34 @@ export class JMAPClient implements IJMAPClient {
    * Fetch every FileNode in the account, files AND folders, to build the folder
    * hierarchy client-side from parentId links.
    *
-   * IMPORTANT: this uses `FileNode/get` with `ids: null` (return-all), NOT
-   * `FileNode/query`. Stalwart's FileNode/query only returns leaf files - it
-   * omits container (folder) nodes entirely - so a query-based listing made
-   * every folder invisible (the whole account looked like a single root file).
+   * IMPORTANT: this starts from `FileNode/get` with `ids: null` (return-all),
+   * NOT `FileNode/query`. Before Stalwart 0.16.6, FileNode/query only returns
+   * leaf files - it omits container (folder) nodes entirely - so a query-based
+   * listing made every folder invisible (the whole account looked like a
+   * single root file).
    */
   async listAllFileNodes(): Promise<FileNode[]> {
-    const accountId = this.getFilesAccountId();
+    const nodes = await this.fetchAllFileNodes(this.getFilesAccountId());
+    return nodes.map(withDecodedName);
+  }
+
+  /**
+   * Every raw FileNode of one account, past the server's /get ceiling.
+   *
+   * `FileNode/get { ids: null }` stops at maxObjectsInGet (500 by default) and
+   * Stalwart gives no sign that the list was cut, so larger accounts silently
+   * lost files (#1069). A full first page therefore counts as truncated: the
+   * remaining ids come from paging FileNode/query and are fetched in /get-sized
+   * batches. Stalwart before 0.16.6 leaves folders out of FileNode/query, so
+   * parents that are still unknown afterwards are fetched by id.
+   */
+  private async fetchAllFileNodes(accountId: string): Promise<FileNode[]> {
+    const using = this.fileUsing();
+    const properties = JMAPClient.FILE_NODE_PROPERTIES;
 
     const response = await this.request(
-      [["FileNode/get", { accountId, ids: null, properties: JMAPClient.FILE_NODE_PROPERTIES }, "fng0"]],
-      this.fileUsing(),
+      [["FileNode/get", { accountId, ids: null, properties }, "fng0"]],
+      using,
     );
 
     const getResult = response.methodResponses?.find(r => r[0] === "FileNode/get" || (r[0] === "error" && r[2] === "fng0"));
@@ -7177,7 +7222,68 @@ export class JMAPClient implements IJMAPClient {
       console.error('[Files] FileNode/get error:', getResult?.[1]);
       throw new Error(getResult?.[1]?.description || "FileNode list failed");
     }
-    return ((getResult[1].list || []) as FileNode[]).map(withDecodedName);
+    const firstPage = (getResult[1].list || []) as FileNode[];
+    const maxObjects = this.getMaxObjectsInGet();
+    if (firstPage.length < maxObjects) return firstPage;
+
+    const known = new Map(firstPage.map(node => [node.id, node]));
+    // Several /get calls share one request, so a large account costs a few
+    // round trips rather than one per batch - the tree is re-read on every
+    // navigation.
+    const fetchByIds = async (ids: string[]) => {
+      const calls = batched(ids, maxObjects).map((batch, i): JMAPMethodCall =>
+        ["FileNode/get", { accountId, ids: batch, properties }, `fng${i + 1}`]);
+      for (const group of batched(calls, this.getMaxCallsInRequest())) {
+        const batchResponse = await this.request(group, using);
+        for (const result of batchResponse.methodResponses || []) {
+          if (result[0] !== "FileNode/get") {
+            throw new Error(result[1]?.description || "FileNode/get failed");
+          }
+          for (const node of (result[1].list || []) as FileNode[]) known.set(node.id, node);
+        }
+      }
+    };
+
+    try {
+      const missing = new Set<string>();
+      for (let position = 0; position < FILE_NODE_MAX_IDS;) {
+        const queryResponse = await this.request(
+          [["FileNode/query", { accountId, filter: {}, position, limit: FILE_NODE_QUERY_PAGE, calculateTotal: true }, "fnq0"]],
+          using,
+        );
+        const queryResult = queryResponse.methodResponses?.[0];
+        if (!queryResult || queryResult[0] !== "FileNode/query") {
+          throw new Error(queryResult?.[1]?.description || "FileNode/query failed");
+        }
+        // The server may clamp `limit`, so only an empty page or a reached
+        // total ends the listing - never a page shorter than the one asked for.
+        const pageIds = (queryResult[1].ids || []) as string[];
+        if (pageIds.length === 0) break;
+        for (const id of pageIds) {
+          if (!known.has(id)) missing.add(id);
+        }
+        position += pageIds.length;
+        const total = queryResult[1].total;
+        if (typeof total === "number" && position >= total) break;
+      }
+      await fetchByIds([...missing]);
+
+      const asked = new Set<string>();
+      for (;;) {
+        const parents = new Set<string>();
+        for (const node of known.values()) {
+          if (node.parentId && !known.has(node.parentId) && !asked.has(node.parentId)) parents.add(node.parentId);
+        }
+        if (parents.size === 0) break;
+        for (const id of parents) asked.add(id);
+        await fetchByIds([...parents]);
+      }
+    } catch (error) {
+      // A partial tree beats none: keep what was read, as before #1069.
+      console.warn(`[Files] Listing for account ${accountId} is incomplete past ${maxObjects} nodes:`, error);
+    }
+
+    return [...known.values()];
   }
 
   /**
@@ -7196,13 +7302,7 @@ export class JMAPClient implements IJMAPClient {
       const isPrimary = accountId === primaryId;
       const account = this.accounts[accountId];
       try {
-        const response = await this.request(
-          [["FileNode/get", { accountId, ids: null, properties: JMAPClient.FILE_NODE_PROPERTIES }, "fng0"]],
-          this.fileUsing(),
-        );
-        const getResult = response.methodResponses?.find(r => r[0] === "FileNode/get");
-        if (!getResult || getResult[0] === "error") continue;
-        const nodes = (getResult[1].list || []) as FileNode[];
+        const nodes = await this.fetchAllFileNodes(accountId);
         for (const node of nodes) {
           all.push({
             ...withDecodedName(node),

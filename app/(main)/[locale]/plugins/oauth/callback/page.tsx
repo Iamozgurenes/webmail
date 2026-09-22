@@ -32,7 +32,7 @@ import {
   PLUGIN_OAUTH_STORAGE_KEY,
   type OAuthCallbackPayload,
 } from "@/lib/plugin-oauth";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "@/components/icons";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -142,10 +142,19 @@ function PluginOAuthCallbackInner() {
   );
 }
 
-export default function PluginOAuthCallbackPage() {
+function PluginOAuthCallbackContent() {
   return (
     <Suspense fallback={<OAuthStatusCard title="" />}>
       <PluginOAuthCallbackInner />
+    </Suspense>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for prerendering (static Lite build).
+export default function PluginOAuthCallbackPage() {
+  return (
+    <Suspense fallback={null}>
+      <PluginOAuthCallbackContent />
     </Suspense>
   );
 }

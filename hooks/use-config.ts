@@ -4,8 +4,10 @@ import { useState, useEffect } from 'react';
 import { usePolicyStore } from '@/stores/policy-store';
 import { apiFetch } from '@/lib/browser-navigation';
 import type { PublicJmapServerEntry } from '@/lib/admin/jmap-servers';
+import { IS_LITE, IS_LITE_STALWART, LITE_CONFIG_PATH, withLiteBuildId } from '@/lib/lite';
+import { applyLiteConfig, liteStalwartDefaults } from '@/lib/lite-config';
 
-interface ConfigData {
+export interface ConfigData {
   appName: string;
   jmapServerUrl: string;
   oauthEnabled: boolean;
@@ -51,6 +53,40 @@ interface AppConfig extends ConfigData {
 let configCache: ConfigData | null = null;
 let configPromise: Promise<ConfigData> | null = null;
 
+/**
+ * Static Lite build: the deployer-edited config.json next to index.html
+ * replaces /api/config. A missing or broken file falls back to the defaults
+ * (custom endpoint allowed) so an unedited download still lets people sign in.
+ */
+async function fetchLiteConfig(): Promise<ConfigData> {
+  // On Stalwart the bundle is read-only and served from the JMAP origin:
+  // config.json ships inside the zip (build-id URL, immutable cache) and an
+  // empty server URL means "this origin".
+  const defaults = IS_LITE_STALWART ? liteStalwartDefaults() : undefined;
+  try {
+    const res = await apiFetch(withLiteBuildId(LITE_CONFIG_PATH), IS_LITE_STALWART ? undefined : { cache: 'no-store' });
+    if (!res.ok) throw new Error(`config.json answered ${res.status}`);
+    return applyLiteConfig(await res.json(), defaults);
+  } catch (err) {
+    console.warn('[lite] config.json missing or invalid, using defaults:', err);
+    return applyLiteConfig({}, defaults);
+  }
+}
+
+async function fetchServerConfig(): Promise<ConfigData> {
+  const res = await apiFetch('/api/config');
+  if (!res.ok) {
+    throw new Error('Failed to fetch config');
+  }
+  return res.json();
+}
+
+/** Test hook: forget the cached config so the next fetch hits the network again. */
+export function resetConfigCache(): void {
+  configCache = null;
+  configPromise = null;
+}
+
 export async function fetchConfig(): Promise<ConfigData> {
   // Return cached config if available
   if (configCache) {
@@ -63,13 +99,7 @@ export async function fetchConfig(): Promise<ConfigData> {
   }
 
   // Start a new fetch
-  configPromise = apiFetch('/api/config')
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error('Failed to fetch config');
-      }
-      return res.json();
-    })
+  configPromise = (IS_LITE ? fetchLiteConfig() : fetchServerConfig())
     .then((data) => {
       configCache = data;
       // Fetch admin policy alongside config (non-blocking)

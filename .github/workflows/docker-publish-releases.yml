@@ -101,7 +101,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.event_name != 'release' || !github.event.release.prerelease }}
             type=semver,pattern=v{{version}}
             type=semver,pattern={{version}}
             type=semver,pattern=v{{major}}.{{minor}}
@@ -212,7 +212,7 @@ jobs:
           flavor: |
             suffix=-always,onlatest=true
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.event_name != 'release' || !github.event.release.prerelease }}
             type=semver,pattern=v{{version}}
             type=semver,pattern={{version}}
             type=semver,pattern=v{{major}}.{{minor}}

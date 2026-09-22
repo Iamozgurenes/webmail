@@ -1,16 +1,18 @@
 node_modules
 .next
+out
+lite-image
 .git
 .gitignore
 .env*
 !.env.example
 !.env.dev.example
 scripts/
+!scripts/lite/
 TODO.md
 *.md
 !README.md
 # Sibling projects / test harness - not part of the webmail image
 examples/
 integration/
-e2e/
 **/node_modules

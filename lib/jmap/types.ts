@@ -243,7 +243,8 @@ export interface Thread {
 
 // Thread grouping for UI display
 export interface ThreadGroup {
-  threadId: string;
+  threadId: string;          // JMAP thread id - unique only within its account; use for Thread/get
+  threadKey: string;         // Client-side identity, unique across accounts (see threadKeyFor)
   emails: Email[];           // Emails in this thread (sorted by receivedAt desc)
   latestEmail: Email;        // Most recent email
   participantNames: string[];// Unique participant names
@@ -792,7 +793,7 @@ export interface CalendarTask {
   timeZone: string | null;
   showWithoutTime: boolean;
   progress: 'needs-action' | 'in-process' | 'completed' | 'cancelled';
-  progressUpdated: string | null;
+  progressUpdated?: string | null;
   priority: number;
   privacy: 'public' | 'private' | 'secret';
   keywords: Record<string, boolean> | null;

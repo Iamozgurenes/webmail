@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { getLocaleDirection } from "@/i18n/direction";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Hanken_Grotesk } from "next/font/google";
 import { headers } from "next/headers";
 import { getLocale, getTranslations } from "next-intl/server";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
@@ -14,7 +14,8 @@ import {
   type BrandingOverrideKey,
 } from "@/lib/admin/domain-branding";
 import { withBasePath } from "@/lib/browser-navigation";
-import { locales } from "@/i18n/routing";
+import { locales, defaultLocale } from "@/i18n/routing";
+import { IS_LITE, LITE_MOUNT_GLOBAL } from "@/lib/lite";
 import "../globals.css";
 
 // This layout renders <html> and sits ABOVE the [locale] segment, so
@@ -37,6 +38,17 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// The "Flat fields" theme's family. Not preloaded and no metric-adjusted
+// fallback: the file is only fetched once that theme renders text in it, and
+// scripts Hanken does not cover fall through to the theme's system stack.
+const hankenGrotesk = Hanken_Grotesk({
+  variable: "--font-hanken",
+  subsets: ["latin", "latin-ext"],
+  display: "swap",
+  preload: false,
+  adjustFontFallback: false,
 });
 
 // Resolve a branding value for the requesting host: per-domain override first,
@@ -102,6 +114,7 @@ async function requestOrigin(): Promise<URL | null> {
 
 /** App name, resolved exactly like app/manifest.ts so <head> and manifest agree. */
 async function brandedAppName(): Promise<string> {
+  if (IS_LITE) return process.env.NEXT_PUBLIC_APP_NAME || "Webmail";
   return (
     (await brandedValue("appName", "")) ||
     process.env.NEXT_PUBLIC_APP_NAME ||
@@ -110,6 +123,10 @@ async function brandedAppName(): Promise<string> {
 }
 
 export async function generateViewport(): Promise<Viewport> {
+  if (IS_LITE) {
+    // No admin config in the static build; <ThemeColorSync /> tracks the theme.
+    return { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#ffffff" };
+  }
   await configManager.ensureLoaded();
   // Chromium uses <meta name="theme-color"> in preference to the manifest's
   // theme_color when coloring an installed desktop PWA's title bar, so a
@@ -123,7 +140,35 @@ export async function generateViewport(): Promise<Viewport> {
   };
 }
 
+/**
+ * Static-build metadata: no request to read a host or locale from, so the
+ * <head> carries the build-time app name, the default locale's description
+ * and the manifest postbuild writes next to index.html. The inline bootstrap
+ * script below corrects <html lang/dir> per page in the browser.
+ */
+async function liteMetadata(): Promise<Metadata> {
+  const appName = await brandedAppName();
+  const t = await getTranslations({ locale: defaultLocale });
+  return {
+    title: appName,
+    description: t("meta_description"),
+    applicationName: appName,
+    robots: { index: false, follow: false },
+    manifest: withBasePath("/manifest.webmanifest"),
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "black-translucent",
+      title: appName,
+    },
+    formatDetection: {
+      telephone: false,
+    },
+    icons: { icon: withBasePath("/branding/Bulwark_Favicon.svg") },
+  };
+}
+
 export async function generateMetadata(): Promise<Metadata> {
+  if (IS_LITE) return liteMetadata();
   await configManager.ensureLoaded();
   // The <head> favicon must honor per-domain branding, exactly like
   // /api/config, app/manifest.ts, and /api/pwa-icon already do. Resolve the
@@ -192,16 +237,51 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
+/**
+ * Lite only: the exported HTML is one document per locale, but this layout
+ * sits above the [locale] segment and cannot know which one it is rendering.
+ * Fix <html lang/dir> from the URL before first paint, in the same inline
+ * script that applies the theme.
+ */
+function liteLocaleBootstrap(): string {
+  const basePath = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(/\/+$/, "");
+  const rtl = locales.filter((l) => getLocaleDirection(l) === "rtl");
+  return `
+                try {
+                  var locales = ${JSON.stringify([...locales])};
+                  var rtl = ${JSON.stringify(rtl)};
+                  var base = ${JSON.stringify(basePath)} || (typeof window.${LITE_MOUNT_GLOBAL} === 'string' ? window.${LITE_MOUNT_GLOBAL} : '');
+                  var path = location.pathname;
+                  if (base && path.indexOf(base) === 0) path = path.slice(base.length);
+                  var seg = path.split('/').filter(Boolean)[0];
+                  if (seg && locales.indexOf(seg) !== -1) {
+                    document.documentElement.lang = seg;
+                    document.documentElement.dir = rtl.indexOf(seg) !== -1 ? 'rtl' : 'ltr';
+                  }
+                } catch (e) {}`;
+}
+
 export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await configManager.ensureLoaded();
-  const locale = await resolveRequestLocale();
-  const nonce = (await headers()).get("x-nonce") ?? "";
   const parentOrigin = process.env.NEXT_PUBLIC_PARENT_ORIGIN || "";
-  const themeColorConfigured = await hasExplicitThemeColor();
+
+  let locale: string;
+  let nonce: string | undefined;
+  let themeColorConfigured: boolean;
+  if (IS_LITE) {
+    // Static export: no request, no nonce, no admin config.
+    locale = defaultLocale;
+    nonce = undefined;
+    themeColorConfigured = false;
+  } else {
+    await configManager.ensureLoaded();
+    locale = await resolveRequestLocale();
+    nonce = (await headers()).get("x-nonce") ?? "";
+    themeColorConfigured = await hasExplicitThemeColor();
+  }
   const appName = await brandedAppName();
 
   return (
@@ -219,7 +299,7 @@ export default async function RootLayout({
           suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html: `
-              (function() {
+              (function() {${IS_LITE ? liteLocaleBootstrap() : ""}
                 try {
                   const stored = localStorage.getItem('theme-storage');
                   const theme = stored ? JSON.parse(stored).state.theme : 'system';
@@ -236,7 +316,7 @@ export default async function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${hankenGrotesk.variable} antialiased`}
       >
         <ServiceWorkerRegistration />
         {!themeColorConfigured && <ThemeColorSync />}

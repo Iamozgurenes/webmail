@@ -1,20 +1,15 @@
-<div align="center">
+<p>
+  <a href="https://bulwarkmail.org"><img src="https://raw.githubusercontent.com/bulwarkmail/.github/main/profile/banner.png" alt="Bulwark: webmail for Stalwart Mail Server. Mail, calendar, contacts and files in one browser client." width="100%" /></a>
+</p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="public/branding/Bulwark_Logo_with_Lettering_White_and_Color.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="public/branding/Bulwark_Logo_with_Lettering_Dark_Color.svg" />
-  <img src="public/branding/Bulwark_Logo_with_Lettering_Dark_Color.svg" alt="Bulwark Webmail" width="280" />
-</picture>
+<p align="center">
+  <a href="https://github.com/bulwarkmail/webmail/releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/release-dark.svg" /><img src="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/release.svg" alt="latest release" height="24" /></picture></a>&nbsp;
+  <a href="https://github.com/bulwarkmail/webmail/pkgs/container/webmail"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/docker-dark.svg" /><img src="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/docker.svg" alt="docker: ghcr.io/bulwarkmail/webmail" height="24" /></picture></a>&nbsp;
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/license-dark.svg" /><img src="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/license.svg" alt="license: AGPL v3" height="24" /></picture></a>&nbsp;
+  <a href="https://discord.gg/tYCujymGrT"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/discord-dark.svg" /><img src="https://raw.githubusercontent.com/bulwarkmail/.github/main/badges/discord.svg" alt="Discord members online" height="24" /></picture></a>
+</p>
 
-# Bulwark Webmail
-
-A self-hosted webmail client for [Stalwart Mail Server](https://stalw.art/), built with Next.js and the JMAP protocol.
-
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPL%20v3-blue.svg?logo=gnu&logoColor=white)](LICENSE)
-[![Discord](https://img.shields.io/discord/1482128142939455674?color=7289da&label=discord&logo=discord&logoColor=white)](https://discord.gg/tYCujymGrT)
-[![Version](https://img.shields.io/badge/version-1.9.2-green.svg?logo=git&logoColor=white)](CHANGELOG.md)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fbulwarkmail%2Fwebmail-blue?logo=docker&logoColor=white)](https://ghcr.io/bulwarkmail/webmail)
-</div>
+Bulwark Webmail is a self-hosted webmail client for [Stalwart Mail Server](https://stalw.art/), built with Next.js and the JMAP protocol.
 
 ## Screenshots
 
@@ -90,6 +85,101 @@ npm install
 npm run build && npm start
 # Then open http://localhost:3000 to run the setup wizard
 ```
+
+### Static Lite build
+
+Bulwark Lite is the same client exported as static files: no Node.js process, upload the folder to any static host (nginx, Caddy, Netlify, Cloudflare Pages, GitHub Pages, an S3 bucket). Mail, calendar, contacts and files talk to the JMAP server straight from the browser, so the only server-side requirement is CORS on the mail server (`http.permissive-cors = true` in Stalwart).
+
+Every release ships `bulwark-lite-<version>.zip` (and `bulwark-lite-stalwart.zip`, see [Install on Stalwart](#install-on-stalwart)), and the **Build Static Lite** workflow can be dispatched with a fixed server URL, app name, sub-path mount, locale subset or the demo flag. To build locally:
+
+```bash
+git worktree add ../bulwark-lite HEAD   # disposable checkout: the build deletes server-only trees
+cd ../bulwark-lite && npm ci
+LITE_JMAP_SERVER_URL=https://mail.example.com npm run build:lite -- --in-place
+npm run lite:serve                       # http://localhost:4173/
+```
+
+`out/` then holds one shell per locale and surface plus the deployer files: `config.json` (server URL, app name, login branding; editable without a rebuild), `policy.json`, `manifest.webmanifest`, `_redirects` and `_headers` (Netlify/Cloudflare), `nginx.conf.example`, `Caddyfile.example`, a `404.html` that replays deep links on hosts without rewrite rules, and `LITE-README.md` with the three-step setup. Build inputs: `LITE_JMAP_SERVER_URL`, `LITE_APP_NAME`, `LITE_ALLOW_CUSTOM_ENDPOINT`, `LITE_REMEMBER_ME`, `LITE_DEMO_MODE`, `LITE_LOCALES` (e.g. `en,de`), `NEXT_PUBLIC_BASE_PATH`.
+
+Lite keeps everything that runs in the browser (multi-account, password and TOTP login, "remember me" via Stalwart refresh tokens, themes, deep links, demo mode). Server-backed features are off: the admin console and setup wizard, plugins and sidebar apps, settings sync, OAuth/SSO, the account security tab, ICS URL subscriptions and CalDAV discovery, sender favicons, office editing, web push, the update banner, the "Default apps" protocol-handler registration. Password logins go through Stalwart's token endpoints in the browser (`/api/auth` + `/auth/token`, so those need CORS as well); without "remember me" the refresh token lives in sessionStorage and the session ends with the tab. `scripts/lite/verify.mjs` fails the build if a client chunk references a server endpoint that is not documented in `scripts/lite/lib.mjs`, and `npm run test:lite-smoke` drives a demo export with Playwright.
+
+#### Lite as a container
+
+`ghcr.io/bulwarkmail/webmail-lite` is the same export behind an unprivileged nginx (no Node.js at runtime, runs as uid 101, listens on 8080, IPv4 and IPv6). Releases are tagged like the main image (`latest`, `1.11.0`, `1.11`, `1`); `ghcr.io/bulwarkmail/webmail-lite-beta:latest` follows `main`. Configure it by mounting your own `config.json` (and, if you need it, `policy.json`) over the baked one:
+
+```yaml
+services:
+  webmail-lite:
+    image: ghcr.io/bulwarkmail/webmail-lite:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # connect-src of the Content-Security-Policy. Defaults to "*" because the
+      # image cannot know your mail server; pin it once config.json does.
+      - LITE_CSP_CONNECT_SRC=https://mail.example.com
+    volumes:
+      - ./config.json:/usr/share/nginx/html/config.json:ro
+    # Optional hardening: nginx only writes to these two.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/nginx/conf.d:uid=101,gid=101
+    restart: unless-stopped
+```
+
+```json
+{
+  "appName": "Example Mail",
+  "jmapServerUrl": "https://mail.example.com",
+  "allowCustomJmapEndpoint": false,
+  "rememberMeEnabled": true
+}
+```
+
+The nginx config is generated from the same routing rules as `nginx.conf.example` (deep links below a surface fall back to that surface's shell, everything else is a real 404) and adds what a static host's `_headers` would: the Content-Security-Policy and the other security headers, immutable caching for `/_next/static/`, revalidation for the shells and `config.json`, gzip. Terminate TLS in the reverse proxy in front of it. The image serves from `/`, so give it a host of its own rather than a sub-path, and remember that the browser talks to the mail server directly: CORS as described above. To bake different defaults or a locale subset, build it yourself - the build args are the `LITE_*` inputs above:
+
+```bash
+docker build -f Dockerfile.lite --build-arg LITE_LOCALES=en,de -t bulwark-lite .
+```
+
+#### Install on Stalwart
+
+Stalwart 0.16 can host the webmail itself as an `Application`: it downloads a zip, serves it under a path of its own HTTP listener, and the webmail talks to the same origin's JMAP, `/api/auth` and `/auth/token`, so there is no server URL to enter and no CORS to set up. Every release ships `bulwark-lite-stalwart.zip` for this (built with `npm run build:lite -- --target=stalwart`). An administrator creates the Application and then asks Stalwart to fetch it. Creating it alone mounts nothing:
+
+```bash
+stalwart-cli create Application \
+  --field description='Bulwark Webmail' \
+  --field resourceUrl='https://github.com/bulwarkmail/webmail/releases/latest/download/bulwark-lite-stalwart.zip' \
+  --field 'urlPrefix={"/webmail":true}'
+stalwart-cli create Action/UpdateApps
+```
+
+The same in the web admin: **Settings > Web Applications**, create the entry, then run the "update applications" action (or restart Stalwart). Over JMAP, as an administrator:
+
+```json
+{
+  "using": ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"],
+  "methodCalls": [
+    ["x:Application/set", { "create": { "webmail": {
+      "description": "Bulwark Webmail",
+      "resourceUrl": "https://github.com/bulwarkmail/webmail/releases/latest/download/bulwark-lite-stalwart.zip",
+      "urlPrefix": { "/webmail": true }
+    } } }, "0"],
+    ["x:Action/set", { "create": { "u": { "@type": "UpdateApps" } } }, "1"]
+  ]
+}
+```
+
+Then open `https://<stalwart host>/webmail/`. Notes:
+
+- **Permissions**: `sysApplicationCreate` (plus `sysApplicationGet`/`Query`/`Update`/`Destroy` to manage it) and `actionUpdateApps`.
+- **Prefix**: `urlPrefix` matches the first path segment only, and one bundle may be mounted under several prefixes; it reads its prefix at runtime. Stalwart routes these segments itself, so they cannot host an Application: `jmap`, `dav`, `.well-known`, `auth`, `api`, `scim`, `mail`, `calendar`, `autodiscover`, `login`, `device`, `metrics`, `healthz`, `logo`, `form`, `robots.txt`, and the web admin's `admin` and `account`.
+- **Updates**: Stalwart caches the zip for `autoUpdateFrequency` (default 90 days) and downloads `resourceUrl` again at the next restart or `UpdateApps` after that. `UpdateApps` always re-downloads, so it is also how to update right away. Open tabs switch to the new build on their next navigation (one full page load); files the app fetches without a content hash carry the build id, so Stalwart's year-long cache headers never pin an old build.
+- **Pinning**: use `https://github.com/bulwarkmail/webmail/releases/download/<version>/bulwark-lite-stalwart.zip` as `resourceUrl`.
+- **OAuth client**: login uses the Application's `oauthClientId`, or `bulwark-webmail` when it is empty. If client registration is required, register that id with the redirect URI `https://<stalwart host>/<prefix>/` (one per prefix).
+- **Single sign-on**: accounts whose directory is an external OpenID provider cannot use the password form (Stalwart has no password to check). The app asks Stalwart who signs an address in and shows **Sign in with SSO** for them instead: authorization code with PKCE, redeemed in the browser. At the provider, register a public client (the `oauthClientId`, or `bulwark-webmail`) with the redirect URI `https://<stalwart host>/<prefix>/oauth/callback` (no locale in it, so one per prefix) and allow CORS from the Stalwart host on its token endpoint, as Stalwart's own web admin requires. Setting `oauthClientId` also offers SSO next to the password form.
+- **Minimum version**: Stalwart 0.16.0 (0.16.19 for `oauthClientId`).
+- **Differences from the static-host zip**: one entry document boots every route (Stalwart has no rewrite rules), no `_redirects`/`_headers`/nginx/Caddy files and no `404.html`, `config.json` defaults to the serving Stalwart and hides the server field, and `manifest.json` replaces `manifest.webmanifest`. The bundle is read-only; to rename or rebrand it, run the **Build Static Lite** workflow (or the build above with `LITE_APP_NAME` etc.), host the resulting `bulwark-lite-stalwart.zip` yourself and point `resourceUrl` at it.
 
 ### Development
 
@@ -391,7 +481,7 @@ In the composer: `Ctrl/Cmd`+`Enter` sends, `Ctrl/Cmd`+`Shift`+`Enter` opens sche
 | **Protocol**  | Custom JMAP client (RFC 8620)                     |
 | **Editor**    | [Tiptap](https://tiptap.dev/)                     |
 | **i18n**      | [next-intl](https://next-intl-docs.vercel.app/)   |
-| **Icons**     | [Lucide React](https://lucide.dev/)               |
+| **Icons**     | [Tabler Icons](https://tabler.io/icons)             |
 | **Testing**   | [Vitest](https://vitest.dev/) + [Playwright](https://playwright.dev/) |
 
 ## Why Stalwart?

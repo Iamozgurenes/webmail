@@ -7,7 +7,7 @@ import { SettingsSection, SettingItem, ToggleSwitch, Select } from './settings-s
 import { playNotificationSound, NOTIFICATION_SOUNDS } from '@/lib/notification-sound';
 import type { NotificationSoundChoice } from '@/lib/notification-sound';
 import { Button } from '@/components/ui/button';
-import { Loader2, RefreshCw, Volume2, XCircle } from 'lucide-react';
+import { Loader2, RefreshCw, Volume2, XCircle } from '@/components/icons';
 import { usePolicyStore } from '@/stores/policy-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -22,6 +22,7 @@ import {
   revokePushDevice,
 } from '@/lib/web-push';
 import type { PushDevice } from '@/lib/web-push';
+import { IS_LITE } from '@/lib/lite';
 import {
   resolveActiveRelayUrl,
   resolvePushRelayOptions,
@@ -104,8 +105,10 @@ export function NotificationSettings() {
 
   const busy = pushStatus.kind === 'busy';
   const pushEnabled = pushStatus.kind === 'enabled';
+  // In the static Lite build push is off by design (no service worker, see
+  // components/service-worker-registration.tsx), not a browser limitation.
   const statusDescription = pushStatus.kind === 'unsupported'
-    ? `${t('push.status_unsupported')} ${t('push.ios_hint')}`
+    ? (IS_LITE ? t('push.status_lite') : `${t('push.status_unsupported')} ${t('push.ios_hint')}`)
     : busy
       ? t('push.status_busy')
       : pushEnabled

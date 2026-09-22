@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Mail, Phone, Building, ExternalLink, Copy, Send, UserPlus } from "lucide-react";
+import { Mail, Phone, Building, ExternalLink, Copy, Send, UserPlus } from "@/components/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { MailtoLink } from "@/components/ui/mailto-link";

@@ -2,7 +2,7 @@ import { isValidEmail } from "@/lib/validation";
 import { splitMailbox } from "@/lib/rfc5322-mailbox";
 import { htmlToPlainText } from "@/lib/html-to-text";
 import { emailHooks } from "@/lib/plugin-hooks";
-import { Ellipsis, Lock, TriangleAlert } from "lucide-react";
+import { Ellipsis, Lock, TriangleAlert } from "@/components/icons";
 import type { Email } from "@/lib/jmap/types";
 
 const HTML_ESCAPE_MAP = {
@@ -211,7 +211,7 @@ export function extractUserAuthoredText(
 
 /**
  * Used for hook to let plugins enrich recipient chips with colors and icons. 
- * The icon is a key into ICON_MAP, which maps to a lucide-react component.
+ * The icon is a key into ICON_MAP, which maps to an icon component.
  */
 export const ICON_MAP = {
   'lock': Lock,

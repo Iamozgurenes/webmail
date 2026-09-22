@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Folder, Loader2, Paperclip, RefreshCw, Star } from "lucide-react";
+import { Folder, Loader2, Paperclip, RefreshCw, Star } from "@/components/icons";
 import { cn, formatDate } from "@/lib/utils";
 import { localizeMailboxName } from "@/lib/mailbox-label";
 import { EmailViewer } from "@/components/email/email-viewer";

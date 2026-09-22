@@ -10,7 +10,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useManagedAccountStore } from '@/stores/managed-account-store';
 import { sanitizeEmailHtml } from '@/lib/email-sanitization';
 import { htmlToPlainText } from '@/lib/html-to-text';
-import { Loader2, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Loader2, AlertTriangle, Eye, EyeOff } from '@/components/icons';
 import { toast } from '@/stores/toast-store';
 
 function utcToLocalDatetime(utcIso: string): string {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useKeywordFormat } from "@/hooks/use-keyword-format";
 import { useShortenedText } from "@/hooks/use-shortened-text";
@@ -63,8 +63,9 @@ export function TagBadge({
       <span
         className={cn("h-2.5 w-2.5 shrink-0 rounded-full", color.dot, className)}
         title={name}
-        aria-label={name}
-      />
+      >
+        <span className="sr-only">{name}</span>
+      </span>
     );
   }
 

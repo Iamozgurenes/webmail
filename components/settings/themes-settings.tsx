@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useThemeStore } from '@/stores/theme-store';
 import { SettingsSection } from './settings-section';
 import { cn } from '@/lib/utils';
-import { Check, Lock } from 'lucide-react';
+import { Check, Lock } from '@/components/icons';
 import { toast } from '@/stores/toast-store';
 import { usePolicyStore } from '@/stores/policy-store';
 

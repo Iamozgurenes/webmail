@@ -4,7 +4,7 @@ import { useState, useId } from "react";
 import { useTranslations } from "next-intl";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { Button } from "@/components/ui/button";
-import { Repeat, Trash2 } from "lucide-react";
+import { Repeat, Trash2 } from "@/components/icons";
 
 export type RecurrenceEditScope = "this" | "this_and_future" | "all";
 
