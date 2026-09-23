@@ -86,7 +86,7 @@ export function ProEmailView({ emailId, client: clientOverride, accountId, onLoa
   const markAsRead = useEmailStore((s) => s.markAsRead);
   const toggleStar = useEmailStore((s) => s.toggleStar);
   const moveToMailbox = useEmailStore((s) => s.moveToMailbox);
-  const setEmailKeywordsLocal = useEmailStore((s) => s.setEmailKeywordsLocal);
+  const setEmailKeywords = useEmailStore((s) => s.setEmailKeywords);
   const mailboxes = useEmailStore((s) => s.mailboxes);
   const identities = useIdentityStore((s) => s.identities);
   const multiAccountIdentities = useProMultiAccountIdentities();
@@ -267,10 +267,10 @@ export function ProEmailView({ emailId, client: clientOverride, accountId, onLoa
     }
   }, [client, markAsRead]);
 
-  const handleSetTag = useCallback((emailIdToTag: string, tagId: string | null) => {
-    if (!email || email.id !== emailIdToTag) return;
-    // Toggle one tag, or clear them all. Matches the mail page's local
-    // optimistic update, down to reaching tags this client cannot name.
+  const handleSetTag = useCallback(async (emailIdToTag: string, tagId: string | null) => {
+    if (!client || !email || email.id !== emailIdToTag) return;
+    // Toggle one tag, or clear them all. Matches the mail page's optimistic
+    // update, down to reaching tags this client cannot name.
     const keywords = { ...(email.keywords ?? {}) };
     if (tagId === null) {
       for (const key of Object.keys(keywords)) {
@@ -289,9 +289,14 @@ export function ProEmailView({ emailId, client: clientOverride, accountId, onLoa
         keywords[KEYWORD_PREFIX + tagId] = true;
       }
     }
-    setEmailKeywordsLocal(emailIdToTag, keywords);
     setEmail({ ...email, keywords });
-  }, [email, setEmailKeywordsLocal]);
+    try {
+      await setEmailKeywords(client, emailIdToTag, keywords);
+    } catch (err) {
+      console.error('Failed to set tag:', err);
+      toast.error(tNotifications('error_updating'));
+    }
+  }, [client, email, setEmailKeywords, tNotifications]);
 
   const handleMoveToMailbox = useCallback(async (mailboxId: string) => {
     if (!client || !email) return;
