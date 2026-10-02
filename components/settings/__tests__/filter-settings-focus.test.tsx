@@ -8,8 +8,9 @@ import { useFilterStore } from '@/stores/filter-store';
 import { FilterSettings } from '../filter-settings';
 
 // The real settings page and its dialogs, against what happens in the
-// background while the user types: the connection check every 30 seconds
-// and a mailbox refresh.
+// background while the user types: the connection check every 30 seconds,
+// a mailbox refresh, and a reload of the filters (another device changed
+// the script).
 
 vi.mock('@/stores/toast-store', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
@@ -80,5 +81,34 @@ describe('typing in a dialog on the filter page while things happen in the backg
     script.focus();
     act(() => useAuthStore.setState({ connectionLost: false }));
     expect(document.activeElement).toBe(script);
+  });
+
+  it('keeps the rule dialog and what was typed through a reload of the filters', () => {
+    typeNewRule();
+    act(() => useFilterStore.setState({ isLoading: true }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    act(() => useFilterStore.setState({ isLoading: false }));
+    expect(screen.getByPlaceholderText('rule_name_placeholder')).toHaveValue('News');
+  });
+
+  it('keeps the Sieve editor and what was typed through a reload of the filters', () => {
+    render(<FilterSettings />);
+    fireEvent.click(screen.getByText('raw_editor'));
+    fireEvent.change(screen.getByLabelText('script_content'), { target: { value: 'keep;' } });
+    act(() => useFilterStore.setState({ isLoading: true }));
+    act(() => useFilterStore.setState({ isLoading: false }));
+    expect(screen.getByLabelText('script_content')).toHaveValue('keep;');
+  });
+
+  it('keeps the rule dialog through a reload that fails', () => {
+    typeNewRule();
+    act(() => useFilterStore.setState({ error: 'offline' }));
+    expect(screen.getByPlaceholderText('rule_name_placeholder')).toHaveValue('News');
+  });
+
+  it('still shows the loading state when no dialog is open', () => {
+    render(<FilterSettings />);
+    act(() => useFilterStore.setState({ isLoading: true }));
+    expect(screen.getByText('loading')).toBeInTheDocument();
   });
 });
