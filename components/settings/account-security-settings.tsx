@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { sanitizeI18nHtml } from '@/lib/email-sanitization';
 import { IS_LITE } from '@/lib/lite';
 import { useConfig } from '@/hooks/use-config';
+import { totpIssuer } from '@/lib/totp-issuer';
 
 function PasswordChangeSection() {
   const t = useTranslations('settings.security');
@@ -195,8 +196,6 @@ function DisplayNameSection() {
   );
 }
 
-// The issuer is what the authenticator app lists the entry under, so it is
-// the configured service name (APP_NAME), not the mail server. (#1160)
 function generateTotp(accountLabel: string, issuer: string): { totp: OTPAuth.TOTP; url: string } {
   const totp = new OTPAuth.TOTP({
     issuer,
@@ -233,7 +232,7 @@ function TotpSection() {
   }, [setupUrl]);
 
   const startSetup = () => {
-    const { totp, url } = generateTotp(client?.getUsername() ?? 'account', appName);
+    const { totp, url } = generateTotp(client?.getUsername() ?? 'account', totpIssuer(appName));
     setSetupTotp(totp);
     setSetupUrl(url);
     setPassword('');
