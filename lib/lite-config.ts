@@ -1,6 +1,7 @@
 import type { ConfigData } from '@/hooks/use-config';
 import type { SettingsPolicy } from '@/lib/admin/types';
 import { DEFAULT_POLICY } from '@/lib/admin/types';
+import { httpUrlOrEmpty } from '@/lib/config-validation';
 
 /**
  * Runtime configuration for the static Lite build.
@@ -36,9 +37,11 @@ export const LITE_CONFIG_KEYS = [
   'loginShowHeading',
   'loginShowSubtitle',
   'loginShowTotp',
+  'loginShowTokenLogin',
   'loginShowVersion',
   'embeddedMode',
   'parentOrigin',
+  'sourceCodeUrl',
 ] as const;
 
 /**
@@ -122,6 +125,7 @@ export function applyLiteConfig(raw: unknown, defaults?: { jmapServerUrl?: strin
     loginShowHeading: bool(input.loginShowHeading, true),
     loginShowSubtitle: bool(input.loginShowSubtitle, true),
     loginShowTotp: bool(input.loginShowTotp, true),
+    loginShowTokenLogin: bool(input.loginShowTokenLogin, false),
     loginShowVersion: bool(input.loginShowVersion, true),
     demoMode: bool(input.demoMode, false),
     allowCustomJmapEndpoint: bool(input.allowCustomJmapEndpoint, jmapServerUrl === '' && jmapServers.length === 0),
@@ -129,6 +133,7 @@ export function applyLiteConfig(raw: unknown, defaults?: { jmapServerUrl?: strin
     jmapServerAutoPickByDomain: bool(input.jmapServerAutoPickByDomain, false),
     embeddedMode: bool(input.embeddedMode, false),
     parentOrigin: str(input.parentOrigin, ''),
+    sourceCodeUrl: httpUrlOrEmpty(input.sourceCodeUrl),
     ...LITE_FORCED_FLAGS,
   };
 }

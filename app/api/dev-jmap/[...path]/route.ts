@@ -2471,7 +2471,11 @@ function tooLargeFor(method: string, args: MethodArgs, callId: string): MethodRe
 // ---------------------------------------------------------------------------
 
 function isDevMockEnabled(): boolean {
-  return process.env.DEV_MOCK_JMAP === 'true';
+  // NEXT_PUBLIC_DEV_MOCK_JMAP is inlined at build time from DEV_MOCK_JMAP
+  // (next.config.ts `env`), so a build made without the mock - every
+  // release image and tarball - cannot switch it on through the runtime
+  // environment: the mock accepts any password.
+  return process.env.NEXT_PUBLIC_DEV_MOCK_JMAP === 'true' && process.env.DEV_MOCK_JMAP === 'true';
 }
 
 function getBaseUrl(request: NextRequest): string {

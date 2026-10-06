@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/browser-navigation';
 import type { PublicJmapServerEntry } from '@/lib/admin/jmap-servers';
 import { IS_LITE, IS_LITE_STALWART, LITE_CONFIG_PATH, withLiteBuildId } from '@/lib/lite';
 import { applyLiteConfig, liteStalwartDefaults } from '@/lib/lite-config';
+import { isConfigData } from '@/lib/config-validation';
 
 export interface ConfigData {
   appName: string;
@@ -34,6 +35,7 @@ export interface ConfigData {
   loginShowHeading: boolean;
   loginShowSubtitle: boolean;
   loginShowTotp: boolean;
+  loginShowTokenLogin: boolean;
   loginShowVersion: boolean;
   demoMode: boolean;
   autoSsoEnabled: boolean;
@@ -43,6 +45,7 @@ export interface ConfigData {
   legacyProxyCookieAuth: boolean;
   embeddedMode: boolean;
   parentOrigin: string;
+  sourceCodeUrl: string;
 }
 
 interface AppConfig extends ConfigData {
@@ -73,12 +76,36 @@ async function fetchLiteConfig(): Promise<ConfigData> {
   }
 }
 
+const CONFIG_ATTEMPT_DELAYS_MS = [0, 500, 1500] as const;
+const CONFIG_TIMEOUT_MS = 10000;
+
 async function fetchServerConfig(): Promise<ConfigData> {
-  const res = await apiFetch('/api/config');
-  if (!res.ok) {
-    throw new Error('Failed to fetch config');
+  let lastError: unknown;
+  for (const delay of CONFIG_ATTEMPT_DELAYS_MS) {
+    if (delay > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    const controller = new AbortController();
+    // Keep the timeout active while reading the body, not only the headers.
+    const timeout = setTimeout(() => controller.abort(), CONFIG_TIMEOUT_MS);
+    try {
+      const response = await apiFetch('/api/config', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Failed to fetch config (${response.status})`);
+      const data: unknown = await response.json();
+      if (!isConfigData(data)) {
+        throw new Error('Invalid application configuration');
+      }
+      return data;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return res.json();
+  throw lastError;
 }
 
 /** Test hook: forget the cached config so the next fetch hits the network again. */
@@ -149,6 +176,7 @@ export function useConfig(): AppConfig {
     loginShowHeading: configCache?.loginShowHeading ?? true,
     loginShowSubtitle: configCache?.loginShowSubtitle ?? true,
     loginShowTotp: configCache?.loginShowTotp ?? true,
+    loginShowTokenLogin: configCache?.loginShowTokenLogin ?? false,
     loginShowVersion: configCache?.loginShowVersion ?? true,
     demoMode: configCache?.demoMode || false,
     autoSsoEnabled: configCache?.autoSsoEnabled || false,
@@ -158,6 +186,7 @@ export function useConfig(): AppConfig {
     legacyProxyCookieAuth: configCache?.legacyProxyCookieAuth || false,
     embeddedMode: configCache?.embeddedMode || false,
     parentOrigin: configCache?.parentOrigin || '',
+    sourceCodeUrl: configCache?.sourceCodeUrl || '',
     isLoading: !configCache,
     error: null,
   });
@@ -192,6 +221,7 @@ export function useConfig(): AppConfig {
         loginShowHeading: configCache.loginShowHeading,
         loginShowSubtitle: configCache.loginShowSubtitle,
         loginShowTotp: configCache.loginShowTotp,
+        loginShowTokenLogin: configCache.loginShowTokenLogin,
         loginShowVersion: configCache.loginShowVersion,
         demoMode: configCache.demoMode,
         autoSsoEnabled: configCache.autoSsoEnabled,
@@ -201,6 +231,7 @@ export function useConfig(): AppConfig {
         legacyProxyCookieAuth: configCache.legacyProxyCookieAuth || false,
         embeddedMode: configCache.embeddedMode,
         parentOrigin: configCache.parentOrigin,
+        sourceCodeUrl: configCache.sourceCodeUrl,
         isLoading: false,
         error: null,
       });
@@ -236,6 +267,7 @@ export function useConfig(): AppConfig {
           loginShowHeading: data.loginShowHeading,
           loginShowSubtitle: data.loginShowSubtitle,
           loginShowTotp: data.loginShowTotp,
+          loginShowTokenLogin: data.loginShowTokenLogin,
           loginShowVersion: data.loginShowVersion,
           demoMode: data.demoMode,
           autoSsoEnabled: data.autoSsoEnabled,
@@ -245,6 +277,7 @@ export function useConfig(): AppConfig {
           legacyProxyCookieAuth: data.legacyProxyCookieAuth || false,
           embeddedMode: data.embeddedMode,
           parentOrigin: data.parentOrigin,
+          sourceCodeUrl: data.sourceCodeUrl,
           isLoading: false,
           error: null,
         });

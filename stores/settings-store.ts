@@ -324,6 +324,7 @@ interface SettingsState {
   returnToListAfterAction: boolean; // After delete / mark-unread in an open message, return to the list instead of opening the next message
   clearSearchOnFolderChange: boolean; // Reset the search query + advanced filters when switching folders, instead of re-running the search in the newly selected folder (#553 keeps it applied when this is off)
   showPreview: boolean;
+  showVerificationCodes: boolean; // Offer the one-time code of a sign-in mail as a copy chip in the list and the reader
   mailLayout: MailLayout;
   emailsPerPage: number;
   externalContentPolicy: ExternalContentPolicy;
@@ -372,6 +373,14 @@ interface SettingsState {
   /** Scroll continuously through months/weeks/days (#759) instead of one period at a time. */
   calendarFreeScroll: boolean;
   calendarHoverPreview: CalendarHoverPreview;
+  /** Draw only calendarDayStartHour..calendarDayEndHour in the day and week views (#1164). */
+  calendarLimitHours: boolean;
+  calendarDayStartHour: number;
+  calendarDayEndHour: number;
+  /** Leave the days missing from calendarWorkingDays out of the week view (#1164). */
+  calendarHideNonWorkingDays: boolean;
+  /** Weekdays as `Date.getDay` numbers (0 = Sunday). */
+  calendarWorkingDays: number[];
 
   // Calendar Tasks
   enableCalendarTasks: boolean;
@@ -396,6 +405,8 @@ interface SettingsState {
   emailNotificationsEnabled: boolean;
   emailNotificationSound: boolean;
   notificationSoundChoice: NotificationSoundChoice;
+  /** Web Push only fires for mail that lands in the Inbox; Sieve-filed mail stays silent. */
+  pushNotifyInboxOnly: boolean;
   /** Chosen Web Push relay URL. Empty = the admin-configured default. */
   pushRelayUrl: string;
 
@@ -454,6 +465,7 @@ interface SettingsState {
   // Sidebar
   colorfulSidebarIcons: boolean; // Tint folder icons by role (inbox blue, junk red, etc.)
   tintListRowsByTag: boolean; // Tint mail-list rows by the first tag color
+  tintListRowsByAccount: boolean; // In the unified view, tint rows by account colour instead of showing the account dot
   showFolderTotalCount: boolean; // Show total message count next to folders/tags (alongside unread)
 
   // Folders
@@ -469,6 +481,9 @@ interface SettingsState {
 
   // Ask for confirmation when sending a message with an empty subject
   emptySubjectWarningEnabled: boolean;
+
+  // "@" in the message body offers the recipients and inserts a first name
+  recipientMentionsEnabled: boolean;
 
   // Hide inline images (images referenced by cid in the HTML body) from the
   // attachment list shown above the message body.
@@ -567,6 +582,7 @@ const DEFAULT_SETTINGS = {
   returnToListAfterAction: true,
   clearSearchOnFolderChange: false,
   showPreview: true,
+  showVerificationCodes: true,
   mailLayout: 'split' as MailLayout,
   emailsPerPage: 50,
   externalContentPolicy: 'ask' as ExternalContentPolicy,
@@ -610,6 +626,11 @@ const DEFAULT_SETTINGS = {
   showWeekNumbers: false,
   calendarFreeScroll: true,
   calendarHoverPreview: 'delay-500ms' as CalendarHoverPreview,
+  calendarLimitHours: true,
+  calendarDayStartHour: 8,
+  calendarDayEndHour: 20,
+  calendarHideNonWorkingDays: false,
+  calendarWorkingDays: [1, 2, 3, 4, 5] as number[],
 
   // Calendar Tasks
   enableCalendarTasks: false,
@@ -629,6 +650,7 @@ const DEFAULT_SETTINGS = {
   emailNotificationsEnabled: true,
   emailNotificationSound: true,
   notificationSoundChoice: 'default' as NotificationSoundChoice,
+  pushNotifyInboxOnly: false,
   pushRelayUrl: '',
 
   // Protocol Handlers
@@ -668,6 +690,7 @@ const DEFAULT_SETTINGS = {
   // Sidebar
   colorfulSidebarIcons: true,
   tintListRowsByTag: true,
+  tintListRowsByAccount: false,
   showFolderTotalCount: true,
 
   // Folders
@@ -709,6 +732,7 @@ const DEFAULT_SETTINGS = {
   ] as string[],
 
   emptySubjectWarningEnabled: true,
+  recipientMentionsEnabled: true,
 
   hideInlineImageAttachments: true,
   attachmentImagePreviewsEnabled: true,
@@ -796,6 +820,7 @@ export const useSettingsStore = create<SettingsState>()(
           returnToListAfterAction: state.returnToListAfterAction,
           clearSearchOnFolderChange: state.clearSearchOnFolderChange,
           showPreview: state.showPreview,
+          showVerificationCodes: state.showVerificationCodes,
           mailLayout: state.mailLayout,
           emailsPerPage: state.emailsPerPage,
           externalContentPolicy: state.externalContentPolicy,
@@ -828,6 +853,7 @@ export const useSettingsStore = create<SettingsState>()(
           emailNotificationsEnabled: state.emailNotificationsEnabled,
           emailNotificationSound: state.emailNotificationSound,
           notificationSoundChoice: state.notificationSoundChoice,
+          pushNotifyInboxOnly: state.pushNotifyInboxOnly,
           pushRelayUrl: state.pushRelayUrl,
           protocolOpenMode: state.protocolOpenMode,
           calendarNotificationsEnabled: state.calendarNotificationsEnabled,
@@ -845,6 +871,11 @@ export const useSettingsStore = create<SettingsState>()(
           showWeekNumbers: state.showWeekNumbers,
           calendarFreeScroll: state.calendarFreeScroll,
           calendarHoverPreview: state.calendarHoverPreview,
+          calendarLimitHours: state.calendarLimitHours,
+          calendarDayStartHour: state.calendarDayStartHour,
+          calendarDayEndHour: state.calendarDayEndHour,
+          calendarHideNonWorkingDays: state.calendarHideNonWorkingDays,
+          calendarWorkingDays: state.calendarWorkingDays,
           toolbarPosition: state.toolbarPosition,
           hideAccountSwitcher: state.hideAccountSwitcher,
           showRailAccountList: state.showRailAccountList,
@@ -863,6 +894,7 @@ export const useSettingsStore = create<SettingsState>()(
           faviconUnreadBadge: state.faviconUnreadBadge,
           colorfulSidebarIcons: state.colorfulSidebarIcons,
           tintListRowsByTag: state.tintListRowsByTag,
+          tintListRowsByAccount: state.tintListRowsByAccount,
           showFolderTotalCount: state.showFolderTotalCount,
           folderIcons: state.folderIcons,
           emailKeywords: state.emailKeywords,
@@ -870,6 +902,7 @@ export const useSettingsStore = create<SettingsState>()(
           attachmentReminderEnabled: state.attachmentReminderEnabled,
           attachmentReminderKeywords: state.attachmentReminderKeywords,
           emptySubjectWarningEnabled: state.emptySubjectWarningEnabled,
+          recipientMentionsEnabled: state.recipientMentionsEnabled,
           hideInlineImageAttachments: state.hideInlineImageAttachments,
           attachmentImagePreviewsEnabled: state.attachmentImagePreviewsEnabled,
           sidebarApps: state.sidebarApps,

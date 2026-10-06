@@ -16,6 +16,7 @@ import { SpamSiegeGame } from './spam-siege-game';
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "0.0.0";
 const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT || "unknown";
+const UPSTREAM_SOURCE_URL = "https://github.com/bulwarkmail/webmail";
 
 function VersionUpdateTag() {
   const status = useUpdateStore((s) => s.status);
@@ -54,7 +55,9 @@ export function AboutDataSettings() {
   const tSettings = useTranslations('settings');
   const { settingsSyncDisabled, updateSetting, resetToDefaults, exportSettings, importSettings } =
     useSettingsStore();
-  const { settingsSyncEnabled } = useConfig();
+  // A modified build must offer its own source (AGPL-3.0 §13), so a
+  // configured URL replaces the upstream repository link.
+  const { settingsSyncEnabled, sourceCodeUrl } = useConfig();
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showRefreshConfirm, setShowRefreshConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -157,12 +160,12 @@ export function AboutDataSettings() {
             </div>
           </button>
           <a
-            href="https://github.com/bulwarkmail/webmail"
+            href={sourceCodeUrl || UPSTREAM_SOURCE_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            GitHub <ExternalLink className="w-3 h-3" />
+            {sourceCodeUrl ? t('about.source_code') : 'GitHub'} <ExternalLink className="w-3 h-3" />
           </a>
         </div>
       </div>

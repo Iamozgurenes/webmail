@@ -2,6 +2,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { JMAPClient } from '@/lib/jmap/client';
 import { useAuthStore } from '../auth-store';
 import { useAccountStore } from '../account-store';
+import { fetchConfig, resetConfigCache } from '@/hooks/use-config';
+import { createConfig } from '@/lib/__tests__/fixtures/config';
 
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = Parameters<typeof fetch>[1];
@@ -15,11 +17,21 @@ const SERVER = 'https://mail.example.com';
 describe('auth-store login Basic-auth pre-check (#969)', () => {
   let connectSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     sessionStorage.clear();
     localStorage.clear();
     window.history.pushState({}, '', '/en/login');
+    // login() reads legacyProxyCookieAuth off the shared config cache; warm
+    // it with a throwaway fetch before each test's own fetch mock is
+    // installed. Otherwise it survives from whichever test ran first in this
+    // file, or, run in isolation, falls through to a real (unmocked)
+    // /api/config fetch that retries for ~2s and shows up as a call these
+    // tests never expected (e.g. "fetchMock not called" for app-relative
+    // servers).
+    resetConfigCache();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => createConfig() })));
+    await fetchConfig();
 
     useAccountStore.setState({ accounts: [], activeAccountId: null, defaultAccountId: null });
     useAuthStore.setState({
@@ -73,6 +85,16 @@ describe('auth-store login Basic-auth pre-check (#969)', () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({ serverUrl: SERVER, username: 'alice', password: 'wrong' });
+  });
+
+  it('checks an address on an IDN domain in its ASCII form (#1100)', async () => {
+    const fetchMock = stubVerify(async () => ({ ok: true, json: async () => ({ result: 'inconclusive' }) }));
+
+    await useAuthStore.getState().login(SERVER, 'alice@bücher.de', 'pw');
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body)).username).toBe('alice@xn--bcher-kva.de');
+    expect(connectSpy).toHaveBeenCalledTimes(1);
   });
 
   it('falls through to the browser-side connect when the pre-check is inconclusive', async () => {

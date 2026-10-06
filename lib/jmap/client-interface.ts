@@ -1,5 +1,6 @@
-import type { Email, Mailbox, MailboxRights, StateChange, AccountStates, CollectionChanges, ShareNotification, BusyPeriod, CalendarParticipantIdentity, CalendarEventNotification, Thread, Identity, EmailAddress, ContactCard, AddressBook, AddressBookRights, VacationResponse, Calendar, CreateCalendarOptions, CalendarRights, CalendarEvent, CalendarEventFilter, CalendarTask, FileNode, FileNodeRights, Principal, PushSubscription, EmailPushConfig, ScheduledEmail, SendEmailResult, SharedAccount } from "./types";
+import type { Attachment, Email, Mailbox, MailboxRights, StateChange, AccountStates, CollectionChanges, ShareNotification, BusyPeriod, CalendarParticipantIdentity, CalendarEventNotification, Thread, Identity, EmailAddress, ContactCard, AddressBook, AddressBookRights, VacationResponse, Calendar, CreateCalendarOptions, CalendarRights, CalendarEvent, CalendarEventFilter, CalendarTask, FileNode, FileNodeRights, Principal, PushSubscription, EmailPushConfig, ScheduledEmail, SendEmailResult, SharedAccount } from "./types";
 import type { SieveScript, SieveCapabilities } from "./sieve-types";
+import type { FileNameRules } from "@/lib/file-name-rules";
 import type { SortLevel } from "@/lib/message-list-order";
 
 /** What `migrateKeyword` managed to do. */
@@ -38,6 +39,15 @@ export interface KeywordDiscoveryResult {
  * (in-memory/browser-only) implement this interface so that stores
  * and UI code never need to know which one is active.
  */
+export interface CalendarEventUpdateOptions {
+  /**
+   * Send `sequence` instead of stripping it with the other server-managed
+   * fields. Only for a patch that creates a recurrence override and must carry
+   * the series' sequence (see buildOccurrenceRsvpPatch).
+   */
+  keepSequence?: boolean;
+}
+
 export interface IJMAPClient {
   // ── Connection lifecycle ──────────────────────────────────────
   connect(): Promise<void>;
@@ -58,7 +68,11 @@ export interface IJMAPClient {
   // ── Capabilities ──────────────────────────────────────────────
   getCapabilities(): Record<string, unknown>;
   hasAccountCapability(capability: string, accountId?: string): boolean;
+  /** FileNode naming rules the server publishes (Stalwart 0.16.6+), if any. */
+  getFileNameRules?(accountId?: string): FileNameRules | null;
   getMaxSizeUpload(): number;
+  /** RFC 8621 maxSizeAttachmentsPerEmail of the mail account (0 = unknown). */
+  getMaxSizeAttachmentsPerEmail?(): number;
   getMaxCallsInRequest(): number;
   getMaxObjectsInGet(): number;
   getMaxObjectsInSet(): number;
@@ -125,6 +139,9 @@ export interface IJMAPClient {
   getEmailChanges?(sinceState: string, accountId?: string, maxChanges?: number): Promise<CollectionChanges | null>;
   createMailbox(name: string, parentId?: string, accountId?: string): Promise<Mailbox>;
   updateMailbox(mailboxId: string, changes: { name?: string; parentId?: string | null; role?: string | null; sortOrder?: number }, accountId?: string): Promise<void>;
+  // Many folder updates in as few Mailbox/set calls as the server allows.
+  // Refused folders don't stop the rest: returns their ids with the SetError type.
+  updateMailboxes(updates: Record<string, { name?: string; parentId?: string | null; role?: string | null; sortOrder?: number }>, accountId?: string): Promise<Record<string, string>>;
   // `removeEmails` destroys the folder's messages too (onDestroyRemoveEmails,
   // RFC 8621 §2.5) instead of failing with mailboxHasEmail.
   deleteMailbox(mailboxId: string, accountId?: string, options?: { removeEmails?: boolean }): Promise<void>;
@@ -171,12 +188,19 @@ export interface IJMAPClient {
   getEmail(emailId: string, accountId?: string): Promise<Email | null>;
   getSomeEmails(emailsId: string[], accountId?: string): Promise<Email[]>
   /**
+   * Attachment parts per email id for list-row chips, fetched lazily because
+   * the server reads each full raw message to answer it (#1089). Optional:
+   * clients whose list emails already carry `attachments` need not implement it.
+   */
+  getEmailAttachments?(emailIds: string[], accountId?: string): Promise<Map<string, Attachment[]>>;
+  /**
    * Total / unread message counts per tag id. `accountId` scopes the count to
    * a group/shared account reached through this client (defaults to the
    * client's own account); the store sums it over every account a tag view
-   * spans (#1038).
+   * spans (#1038). A message filed only in `excludeMailboxIds` (the account's
+   * Trash and Junk, which the tag view leaves out, #1156) is not counted.
    */
-  getTagCounts(tagIds: string[], accountId?: string): Promise<Record<string, { total: number; unread: number }>>;
+  getTagCounts(tagIds: string[], accountId?: string, excludeMailboxIds?: string[]): Promise<Record<string, { total: number; unread: number }>>;
   /**
    * Enumerate account keywords for extensions. Servers supporting Keyword/get
    * can return exact counts and provider-label metadata; other servers use the
@@ -214,6 +238,23 @@ export interface IJMAPClient {
    * bodies or attachments), deduped.
    */
   searchSentRecipients(query: string, sentMailboxId: string, accountId?: string, limit?: number): Promise<Array<{ name: string; email: string }>>;
+  /**
+   * Only the named properties (e.g. `header:List-Id:asText`) of the given
+   * messages, plus their `id`. Nothing is namespaced: ids stay as the server
+   * has them.
+   */
+  getEmailFields(emailIds: string[], properties: string[], accountId?: string): Promise<Array<Record<string, unknown>>>;
+  /**
+   * Every message matching `filter`, newest first, with only the named
+   * properties plus `id`. Pages through the whole result up to `limit`
+   * (default 10000).
+   */
+  queryEmailFields(
+    filter: Record<string, unknown>,
+    properties: string[],
+    accountId?: string,
+    limit?: number,
+  ): Promise<Array<Record<string, unknown>>>;
 
   // ── Email mutations ───────────────────────────────────────────
   markAsRead(emailId: string, read?: boolean, accountId?: string): Promise<void>;
@@ -244,6 +285,7 @@ export interface IJMAPClient {
   ): Promise<void>;
   moveEmail(emailId: string, toMailboxId: string, accountId?: string): Promise<void>;
   emptyMailbox(mailboxId: string, accountId?: string): Promise<number>;
+  moveMailboxContents(fromMailboxId: string, toMailboxId: string, accountId?: string, markAsRead?: boolean): Promise<number>;
   markMailboxAsRead(mailboxId: string, accountId?: string): Promise<number>;
   markAllAsRead(excludeMailboxIds?: string[], accountId?: string): Promise<number>;
   markAsSpam(emailId: string, accountId?: string, markAsRead?: boolean): Promise<void>;
@@ -267,6 +309,8 @@ export interface IJMAPClient {
     attachments?: Array<{ blobId: string; name: string; type: string; size: number; disposition?: 'attachment' | 'inline'; cid?: string }>,
     fromName?: string,
     htmlBody?: string,
+    inReplyTo?: string[],
+    references?: string[],
   ): Promise<string>;
 
   sendEmail(
@@ -284,6 +328,9 @@ export interface IJMAPClient {
     inReplyTo?: string[],
     references?: string[],
     delayedUntil?: string,
+    // The SMTP MAIL FROM wanted instead of the identity's address (a From
+    // override). Sent through the identity that owns it when there is one;
+    // a server that refuses it gets the identity's address instead.
     envelopeMailFrom?: string,
     // requestDsn / requireTls map to RFC 3461 / RFC 8689 envelope parameters
     // and need the matching `submissionExtensions` entry (see
@@ -320,7 +367,7 @@ export interface IJMAPClient {
   cancelEmailSubmission(submissionId: string, accountId?: string): Promise<void>;
   rescheduleEmailSubmission(submissionId: string, emailId: string, identityId: string, delayedUntil: string, accountId?: string): Promise<SendEmailResult>;
   /** `sentMailboxId` is accepted for backwards compatibility but ignored: the message is placed in Drafts only. */
-  restoreEmailToDraft(emailId: string, draftMailboxId: string, sentMailboxId?: string): Promise<void>;
+  restoreEmailToDraft(emailId: string, draftMailboxId: string, sentMailboxId?: string, accountId?: string): Promise<void>;
 
   sendImipReply(opts: {
     organizerEmail: string;
@@ -391,7 +438,7 @@ export interface IJMAPClient {
   createAddressBook(name: string): Promise<AddressBook>;
   updateAddressBook(addressBookId: string, updates: Partial<AddressBook>, targetAccountId?: string): Promise<void>;
   setDefaultAddressBook(addressBookId: string, targetAccountId?: string): Promise<void>;
-  deleteAddressBook(addressBookId: string, targetAccountId?: string): Promise<void>;
+  deleteAddressBook(addressBookId: string, targetAccountId?: string, options?: { removeContents?: boolean }): Promise<void>;
   getContacts(addressBookId?: string, options?: { throwOnError?: boolean }): Promise<ContactCard[]>;
   getAllContacts(): Promise<ContactCard[]>;
   getContact(contactId: string, accountId?: string): Promise<ContactCard | null>;
@@ -404,6 +451,7 @@ export interface IJMAPClient {
   getCalendarsAccountId(): string;
   getCalendars(): Promise<Calendar[]>;
   getAllCalendars(): Promise<Calendar[]>;
+  getAllCalendarsWithFailures(): Promise<{ calendars: Calendar[]; failedAccountIds: string[] }>;
   createCalendar(calendar: Partial<Calendar>, targetAccountId?: string, options?: CreateCalendarOptions): Promise<Calendar>;
   updateCalendar(calendarId: string, updates: Partial<Calendar>, targetAccountId?: string): Promise<void>;
   setDefaultCalendar(calendarId: string, targetAccountId?: string): Promise<void>;
@@ -417,6 +465,7 @@ export interface IJMAPClient {
     updates: Partial<CalendarEvent>,
     sendSchedulingMessages?: boolean,
     targetAccountId?: string,
+    options?: CalendarEventUpdateOptions,
   ): Promise<void>;
   deleteCalendarEvent(eventId: string, sendSchedulingMessages?: boolean, targetAccountId?: string): Promise<void>;
   batchDeleteCalendarEvents(eventIds: string[], targetAccountId?: string): Promise<{ destroyed: string[]; notDestroyed: Record<string, { type?: string; description?: string }> }>;
@@ -449,6 +498,9 @@ export interface IJMAPClient {
   createSieveScript(name: string, content: string, activate?: boolean, accountId?: string): Promise<SieveScript>;
   updateSieveScript(scriptId: string, content: string, activate?: boolean, accountId?: string): Promise<void>;
   deleteSieveScript(scriptId: string, accountId?: string): Promise<void>;
+  activateSieveScript(scriptId: string, accountId?: string): Promise<void>;
+  /** Leave the account with no active script. */
+  deactivateSieveScript(accountId?: string): Promise<void>;
   validateSieveScript(content: string, accountId?: string): Promise<{ isValid: boolean; errors?: string[] }>;
 
   // ── Files (WebDAV / FileNode) ─────────────────────────────────
@@ -466,14 +518,20 @@ export interface IJMAPClient {
   copyFileNode(id: string, newName: string, parentId: string | null): Promise<FileNode>;
 
   // ── S/MIME raw-email helpers ──────────────────────────────────
-  importRawEmail(blob: Blob, mailboxIds: Record<string, boolean>, keywords?: Record<string, boolean>, accountId?: string): Promise<string>;
+  /**
+   * Upload a raw message and import it (Email/import). `receivedAt` keeps the
+   * original date when a message is carried over from another account;
+   * without it the server stamps the import time.
+   */
+  importRawEmail(blob: Blob, mailboxIds: Record<string, boolean>, keywords?: Record<string, boolean>, accountId?: string, receivedAt?: string): Promise<string>;
   submitEmail(emailId: string, identityId: string): Promise<void>;
   /**
    * Server-side move of one email across accounts reachable through THIS client
    * (JMAP `Email/copy` + destroy-original). Used for delegated/shared folders,
    * where the two accounts share a client but a client can't stage a blob in a
    * delegated account (so the blob copy+import path doesn't work). Returns the
-   * new email id in the destination account.
+   * new email id in the destination account. `keepOriginal` makes it a plain
+   * copy: the source message is left where it is.
    */
-  copyEmailAcrossAccounts(emailId: string, fromAccountId: string, toAccountId: string, destMailboxId: string): Promise<string>;
+  copyEmailAcrossAccounts(emailId: string, fromAccountId: string, toAccountId: string, destMailboxId: string, options?: { keepOriginal?: boolean }): Promise<string>;
 }

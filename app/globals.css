@@ -199,6 +199,15 @@ option {
   color: var(--color-popover-foreground);
 }
 
+/* The group labels (the From dropdown's accounts) are painted the same way.
+   Without colours of their own they kept the control's text colour on the
+   popup's base, which a transparent control leaves light: in dark themes,
+   light text on a white bar. */
+optgroup {
+  background-color: var(--color-popover);
+  color: var(--color-popover-foreground);
+}
+
 .dark select {
   color-scheme: dark;
 }

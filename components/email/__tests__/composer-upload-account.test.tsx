@@ -317,4 +317,31 @@ describe('composer attachment upload account (#943)', () => {
     });
     expect(deleteStagedFile).toHaveBeenCalledTimes(1);
   });
+
+  it('does not upload files over the server limits', async () => {
+    const { otherClient } = mockClients();
+    Object.assign(otherClient, { getMaxSizeUpload: () => 10, getMaxSizeAttachmentsPerEmail: () => 12 });
+    render(
+      <EmailComposer
+        initialData={{
+          to: '', cc: '', bcc: '', subject: '', body: '', showCc: false, showBcc: false,
+          selectedIdentityId: 'acct-2::id-other', subAddressTag: '', mode: 'compose', draftId: null,
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const tooBig = new File(['x'.repeat(11)], 'big.txt', { type: 'text/plain' });
+    const first = new File(['x'.repeat(8)], 'a.txt', { type: 'text/plain' });
+    const second = new File(['x'.repeat(8)], 'b.txt', { type: 'text/plain' });
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [tooBig, first, second] } });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // big.txt is over the per-file limit; b.txt would push the message past 12.
+    expect(otherClient.uploadBlob).toHaveBeenCalledTimes(1);
+    expect(otherClient.uploadBlob.mock.calls[0][0]).toBe(first);
+  });
 });

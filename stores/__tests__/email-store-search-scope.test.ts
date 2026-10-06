@@ -32,6 +32,7 @@ function makeClient() {
     searchEmails: vi.fn().mockResolvedValue({ emails: [], hasMore: false, total: 0 }),
     advancedSearchEmails: vi.fn().mockResolvedValue({ emails: [], hasMore: false, total: 0 }),
     getSomeEmails: vi.fn().mockResolvedValue([]),
+    getAccountId: () => 'me',
   } as unknown as IJMAPClient;
 }
 
@@ -73,11 +74,14 @@ describe('search folder scope (#788)', () => {
     expect(useEmailStore.getState().searchMailboxId).toBe('');
   });
 
-  it('quick search from within a folder queries every folder', async () => {
+  it('quick search from within a folder queries every folder of every account', async () => {
     await useEmailStore.getState().searchEmails(client, 'invoice');
 
-    // No mailbox id -> the JMAP client omits the inMailbox constraint.
-    expect(client.searchEmails).toHaveBeenCalledWith('invoice', '', undefined, 50, 0);
+    // No mailbox id -> the JMAP client omits the inMailbox constraint; the
+    // shared folder's owner is asked as well (#1082).
+    expect(client.searchEmails).toHaveBeenCalledTimes(2);
+    expect(client.searchEmails).toHaveBeenCalledWith('invoice', undefined, undefined, 50, 0);
+    expect(client.searchEmails).toHaveBeenCalledWith('invoice', undefined, 'owner-x', 50, 0);
   });
 
   it('advanced search from within a folder does not add an inMailbox condition', async () => {
@@ -85,9 +89,13 @@ describe('search folder scope (#788)', () => {
 
     await useEmailStore.getState().advancedSearch(client);
 
-    const [filter] = (client.advancedSearchEmails as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(filter).toEqual({ from: 'bob@example.com' });
-    expect(JSON.stringify(filter)).not.toContain('inMailbox');
+    const calls = (client.advancedSearchEmails as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    for (const [filter] of calls) {
+      expect(filter).toEqual({ from: 'bob@example.com' });
+      expect(JSON.stringify(filter)).not.toContain('inMailbox');
+    }
+    expect(calls.map(([, accountId]) => accountId)).toEqual([undefined, 'owner-x']);
   });
 
   it('honours an explicitly chosen folder that differs from the open one', async () => {
@@ -140,6 +148,100 @@ describe('search folder scope (#788)', () => {
   it('clearing the filters resets the scope back to all folders', () => {
     useEmailStore.getState().setSearchMailboxId('inbox');
     useEmailStore.getState().clearSearchFilters();
+
+    expect(useEmailStore.getState().searchMailboxId).toBe('');
+  });
+});
+
+describe('unread badge scope', () => {
+  let client: IJMAPClient;
+
+  beforeEach(() => {
+    client = makeClient();
+    useAuthStore.setState({
+      activeAccountId: 'account-a',
+      getClientForAccount: (id: string) => (id === 'account-a' ? client : undefined) as never,
+    } as never);
+    useSettingsStore.setState({ emailsPerPage: 50 } as never);
+    useEmailStore.setState({
+      isUnifiedView: false,
+      unifiedRole: null,
+      crossView: null,
+      viewingAccountId: null,
+      selectedKeyword: null,
+      selectedMailbox: 'sent',
+      searchMailboxId: '',
+      searchScopeFollowsFolder: false,
+      searchQuery: '',
+      searchFilters: { ...DEFAULT_SEARCH_FILTERS },
+      searchAbortController: null,
+      emails: [],
+      mailboxes: [
+        makeMailbox({ id: 'inbox', role: 'inbox' }),
+        makeMailbox({ id: 'sent', name: 'Sent Items', role: 'sent' }),
+        makeMailbox({ id: 'owner-x:x-inbox', originalId: 'x-inbox', name: 'Shared Inbox', role: 'inbox', isShared: true, accountId: 'owner-x' }),
+      ],
+      accountMailboxes: {},
+    });
+  });
+
+  // What mail-app's handleUnreadFilterClick does with the store.
+  async function clickUnreadBadge(mailboxId: string) {
+    const store = useEmailStore.getState();
+    store.selectMailbox(mailboxId);
+    store.clearSearchFilters();
+    store.scopeSearchToOpenFolder();
+    store.setSearchFilters({ isUnread: true });
+    await useEmailStore.getState().advancedSearch(client);
+  }
+
+  const searchCalls = () => (client.advancedSearchEmails as ReturnType<typeof vi.fn>).mock.calls;
+
+  it('lists the unread mail of that folder, not of every folder and account', async () => {
+    await clickUnreadBadge('inbox');
+
+    expect(searchCalls()).toHaveLength(1);
+    const [filter, accountId] = searchCalls()[0];
+    expect(filter).toEqual({
+      operator: 'AND',
+      conditions: [{ notKeyword: '$seen' }, { inMailbox: 'inbox' }],
+    });
+    expect(accountId).toBeUndefined();
+  });
+
+  it('lists a shared folder in its owner account', async () => {
+    await clickUnreadBadge('owner-x:x-inbox');
+
+    expect(searchCalls()).toHaveLength(1);
+    const [filter, accountId] = searchCalls()[0];
+    expect(JSON.stringify(filter)).toContain('"inMailbox":"x-inbox"');
+    expect(accountId).toBe('owner-x');
+  });
+
+  it('moves to the next folder the user opens instead of listing the old one there', async () => {
+    await clickUnreadBadge('inbox');
+    useEmailStore.getState().selectMailbox('sent');
+
+    expect(useEmailStore.getState().searchMailboxId).toBe('sent');
+
+    await useEmailStore.getState().advancedSearch(client);
+    const [filter] = searchCalls()[1];
+    expect(JSON.stringify(filter)).toContain('"inMailbox":"sent"');
+    expect(JSON.stringify(filter)).not.toContain('"inMailbox":"inbox"');
+  });
+
+  it('stops following once the user picks a scope', async () => {
+    await clickUnreadBadge('inbox');
+    useEmailStore.getState().setSearchMailboxId('owner-x:x-inbox');
+    useEmailStore.getState().selectMailbox('sent');
+
+    expect(useEmailStore.getState().searchMailboxId).toBe('owner-x:x-inbox');
+  });
+
+  it('stops following once the filters are cleared', async () => {
+    await clickUnreadBadge('inbox');
+    useEmailStore.getState().clearSearchFilters();
+    useEmailStore.getState().selectMailbox('sent');
 
     expect(useEmailStore.getState().searchMailboxId).toBe('');
   });

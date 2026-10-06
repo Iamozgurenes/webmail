@@ -7,6 +7,8 @@ name: Publish Lite Docker Image
 #   - release:       ghcr.io/<repo>-lite       (semver tags, latest unless prerelease)
 #   - push to main:  ghcr.io/<repo>-lite-beta  (latest + sha)
 #   - pull request:  smoke test only
+# Published images get a signed build provenance attestation, pushed to GHCR
+# next to them: `gh attestation verify oci://<image>:<tag> --owner bulwarkmail`.
 
 on:
   release:
@@ -126,6 +128,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}-lite${{ github.event_name != 'release' && '-beta' || '' }}
     steps:
@@ -161,6 +165,7 @@ jobs:
       # builder to $BUILDPLATFORM) and the final stage only COPYs, so both
       # platforms come out of one job without QEMU.
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -176,3 +181,11 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
