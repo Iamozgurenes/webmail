@@ -2420,6 +2420,10 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
       void refreshMailboxes();
     } catch (error) {
       console.error("Failed to archive email:", error);
+      if (error instanceof ArchiveMailboxNotFoundError) {
+        toast.error(t('email_viewer.archive_mailbox_not_found'));
+        return;
+      }
       toast.error(t('notifications.error_archiving'), error instanceof Error ? error.message : undefined);
     }
   };
