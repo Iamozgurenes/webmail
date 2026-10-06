@@ -25,7 +25,7 @@ import { FolderTreeSidebar } from "@/components/files/folder-tree-sidebar";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { Avatar } from "@/components/ui/avatar";
 import { getDroppedFilesAndFolders } from "@/lib/webdav/drop-utils";
-import type { FileResource } from "@/stores/file-store";
+import { useFileStore, type FileResource } from "@/stores/file-store";
 import { ShareCollectionDialog } from "@/components/settings/share-collection-dialog";
 import type { IJMAPClient } from "@/lib/jmap/client-interface";
 import type { FileNodeRights } from "@/lib/jmap/types";
@@ -290,13 +290,38 @@ export function FileBrowser({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   // The share dialog is bound to a node id (not name) so its shareWith stays
   // live after a share refresh re-derives the resource list.
-  const shareTarget = shareTargetId ? resources.find(r => r.id === shareTargetId) ?? null : null;
+  // A folder shared from the tree (sidebar layout) is usually not among the
+  // listed resources, so the dialog keeps its own copy and re-reads it after
+  // each change.
+  const [treeShareTarget, setTreeShareTarget] = useState<FileResource | null>(null);
+  const shareTarget = shareTargetId
+    ? resources.find(r => r.id === shareTargetId)
+      ?? (treeShareTarget?.id === shareTargetId ? treeShareTarget : null)
+    : null;
   // A node is shareable when the server supports JMAP Sharing, the viewer owns
   // it (not a shared-with-me node), and holds the mayShare right (owned nodes
   // report full rights; treat missing myRights as allowed).
   const canShare = useCallback((r: FileResource | null | undefined): boolean =>
     !!(sharingEnabled && onShare && client && r && !r.isShared && (r.myRights?.mayShare ?? true)),
     [sharingEnabled, onShare, client]);
+  const reloadTreeShareTarget = useCallback(async (target: FileResource) => {
+    const siblings = await listByParentId(target.parentId ?? null);
+    setTreeShareTarget(siblings.find(r => r.id === target.id) ?? target);
+  }, [listByParentId]);
+  const handleTreeShare = useCallback((target: FileResource) => {
+    setTreeShareTarget(target);
+    setShareTargetId(target.id);
+    // The tree caches its listing; fetch the current shares before editing.
+    void reloadTreeShareTarget(target);
+  }, [reloadTreeShareTarget]);
+  // Folders other principals shared with the user. The sidebar layout lists
+  // them in the folder tree; the inline layout lists them at the root (#1181).
+  const storeClient = useFileStore(s => s.client);
+  const sharedRoots = useFileStore(s => s.sharedRoots);
+  const loadSharedRoots = useFileStore(s => s.loadSharedRoots);
+  useEffect(() => {
+    if (storeClient) void loadSharedRoots();
+  }, [storeClient, loadSharedRoots]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   const [emptyContextMenu, setEmptyContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [showNewTextFile, setShowNewTextFile] = useState(false);
@@ -419,6 +444,13 @@ export function FileBrowser({
     });
     return sorted;
   }, [resources, searchQuery, sortKey, sortDir, folderLayout]);
+
+  const sharedFolders = useMemo(() => {
+    if (folderLayout !== "inline" || currentPath !== "/" || accountPickerMode) return [];
+    const q = searchQuery.toLowerCase();
+    return sharedRoots.filter(r => r.isDirectory && (!q || r.name.toLowerCase().includes(q)));
+  }, [folderLayout, currentPath, accountPickerMode, sharedRoots, searchQuery]);
+  const openSharedFolder = (resource: FileResource) => onNavigate(`/${resource.name}`, resource.id);
 
   // Build breadcrumb segments. In Pro mode an account is mounted "between"
   // Home and the account's filesystem - surfaced as a non-clickable label
@@ -1142,6 +1174,8 @@ export function FileBrowser({
                 onNavigate={onNavigate}
                 listByParentId={listByParentId}
                 width={288}
+                canShare={canShare}
+                onShare={handleTreeShare}
               />
             </div>
           ) : (
@@ -1152,6 +1186,8 @@ export function FileBrowser({
                 listByParentId={listByParentId}
                 width={sidebarWidth}
                 isResizing={isResizing}
+                canShare={canShare}
+                onShare={handleTreeShare}
               />
               <ResizeHandle
                 onResizeStart={() => { dragStartWidth.current = sidebarWidth; setIsResizing(true); }}
@@ -1277,7 +1313,7 @@ export function FileBrowser({
           <div className="flex items-center justify-center h-full">
             <p className="text-sm text-muted-foreground">{t("no_accounts")}</p>
           </div>
-        ) : resources.length === 0 && !searchQuery && currentPath === '/' ? (
+        ) : resources.length === 0 && sharedFolders.length === 0 && !searchQuery && currentPath === '/' ? (
           <FileUploadArea
             onUpload={async (files: File[]) => {
               setIsUploading(true);
@@ -1329,9 +1365,9 @@ export function FileBrowser({
                 <span className="text-xs text-muted-foreground truncate w-full text-center">..</span>
               </div>
             )}
-            {displayResources.length === 0 && searchQuery ? (
+            {displayResources.length === 0 && sharedFolders.length === 0 && searchQuery ? (
               <p className="px-4 py-8 text-center text-muted-foreground text-sm">{t("no_results")}</p>
-            ) : (
+            ) : displayResources.length === 0 ? null : (
               <div
                 className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2"
                 onContextMenu={(e) => {
@@ -1399,6 +1435,31 @@ export function FileBrowser({
                   </div>
                 ))}
               </div>
+            )}
+            {sharedFolders.length > 0 && (
+              <section aria-label={t("shared_with_me")} className={cn(displayResources.length > 0 && "mt-4")}>
+                <h4 className="px-1 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <Share2 className="w-3 h-3" />
+                  {t("shared_with_me")}
+                </h4>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
+                  {sharedFolders.map((resource) => (
+                    <button
+                      key={resource.id}
+                      type="button"
+                      onClick={() => openSharedFolder(resource)}
+                      title={resource.ownerName ? t("shared_by", { name: resource.ownerName }) : resource.name}
+                      className="flex flex-col items-center gap-2 p-3 rounded-lg cursor-pointer transition-colors hover:bg-muted/50"
+                    >
+                      {getGridIcon(resource)}
+                      <span className="text-xs truncate w-full text-center flex items-center justify-center gap-1">
+                        <span className="truncate">{resource.name}</span>
+                        <ShareBadge resource={resource} t={t} />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
             )}
           </div>
         ) : (
@@ -1482,7 +1543,7 @@ export function FileBrowser({
                   <td />
                 </tr>
               )}
-              {displayResources.length === 0 && searchQuery ? (
+              {displayResources.length === 0 && sharedFolders.length === 0 && searchQuery ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground text-sm">
                     {t("no_results")}
@@ -1563,6 +1624,44 @@ export function FileBrowser({
                       <MoreVertical className="w-4 h-4" />
                     </button>
                   </td>
+                </tr>
+              ))}
+              {sharedFolders.length > 0 && (
+                <tr className="border-b border-border bg-muted/30">
+                  <th colSpan={4} scope="rowgroup" className="px-4 py-1.5 text-start text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <Share2 className="w-3 h-3" />
+                      {t("shared_with_me")}
+                    </span>
+                  </th>
+                </tr>
+              )}
+              {sharedFolders.map((resource) => (
+                <tr
+                  key={resource.id}
+                  className="border-b border-border cursor-pointer transition-colors hover:bg-muted/50"
+                  onClick={() => openSharedFolder(resource)}
+                  title={resource.ownerName ? t("shared_by", { name: resource.ownerName }) : undefined}
+                >
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-4 h-4 shrink-0" />
+                      {getFileIcon(resource)}
+                      <button
+                        type="button"
+                        className="truncate text-start"
+                        onClick={(e) => { e.stopPropagation(); openSharedFolder(resource); }}
+                      >
+                        {resource.name}
+                      </button>
+                      <ShareBadge resource={resource} t={t} />
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-muted-foreground hidden md:table-cell">-</td>
+                  <td className="px-4 py-2.5 text-muted-foreground hidden lg:table-cell tabular-nums">
+                    {formatDate(resource.lastModified)}
+                  </td>
+                  <td className="px-2 py-2.5" />
                 </tr>
               ))}
             </tbody>
@@ -1927,9 +2026,11 @@ export function FileBrowser({
           collectionName={shareTarget.name}
           shareWith={shareTarget.shareWith}
           ownAccountId={ownAccountId || ""}
-          onShare={(principalId, rights) =>
-            onShare(shareTarget.id, principalId, rights as FileNodeRights | null)}
-          onClose={() => setShareTargetId(null)}
+          onShare={async (principalId, rights) => {
+            await onShare(shareTarget.id, principalId, rights as FileNodeRights | null);
+            if (treeShareTarget?.id === shareTarget.id) await reloadTreeShareTarget(shareTarget);
+          }}
+          onClose={() => { setShareTargetId(null); setTreeShareTarget(null); }}
         />
       )}
     </div>
