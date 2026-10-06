@@ -597,7 +597,7 @@ export function FilterRuleModal({
                         type="email"
                         className="flex-1 min-w-[180px]"
                       />
-                      <label className="flex items-center gap-1.5 text-sm text-foreground">
+                      <label className="flex items-center gap-1.5 text-sm text-foreground cursor-pointer">
                         <input
                           type="checkbox"
                           checked={!!action.keepCopy}
