@@ -44,6 +44,19 @@ integration/run-tests.sh 01-login
 bundles can't always be downloaded/installed on the host; the official
 `mcr.microsoft.com/playwright` image sidesteps that.
 
+### In CI
+
+The "Integration tests" workflow (`.github/workflows/integration.yml`) runs
+`run-tests.sh` every night on main, on pull requests that carry the
+`integration` label, and on demand:
+
+```bash
+gh workflow run integration.yml
+```
+
+A failed run uploads the Playwright report, traces and failure videos as the
+`integration-report` artifact and prints the container logs.
+
 ### Running against a host browser instead
 
 If you *can* install Playwright browsers on your machine:
