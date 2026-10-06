@@ -373,6 +373,8 @@ interface EmailStore {
   setMailboxRole: (client: IJMAPClient, mailboxId: string, role: string | null) => Promise<void>;
   reorderMailboxes: (client: IJMAPClient, orderedIds: string[]) => Promise<void>;
   moveMailbox: (client: IJMAPClient, mailboxId: string, newParentId: string | null, orderedSiblingIds?: string[]) => Promise<void>;
+  /** Reparents several folders at once; resolves with the ids the server refused. */
+  moveMailboxes: (client: IJMAPClient, mailboxIds: string[], newParentId: string | null) => Promise<string[]>;
   emptyMailbox: (client: IJMAPClient, mailboxId: string) => Promise<void>;
   markMailboxAsRead: (client: IJMAPClient, mailboxId: string) => Promise<number>;
 
@@ -5154,6 +5156,65 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     } else {
       await get().fetchMailboxes(client);
     }
+  },
+
+  moveMailboxes: async (client, mailboxIds, newParentId) => {
+    // One Mailbox/set per owning account instead of one request per folder,
+    // so moving a hundred folders under a new parent stays quick (#1173).
+    const parentTarget = newParentId ? resolveMailboxMutationContext(client, newParentId) : null;
+    const groups: Array<{
+      client: IJMAPClient;
+      accountId: string | undefined;
+      updates: Record<string, { parentId: string | null }>;
+      storeIds: Record<string, string>;
+    }> = [];
+    for (const id of mailboxIds) {
+      const target = resolveMailboxMutationContext(client, id);
+      let group = groups.find(g => g.client === target.client && g.accountId === target.accountId);
+      if (!group) {
+        group = { client: target.client, accountId: target.accountId, updates: {}, storeIds: {} };
+        groups.push(group);
+      }
+      group.updates[target.mailboxId] = { parentId: parentTarget ? parentTarget.mailboxId : null };
+      group.storeIds[target.mailboxId] = id;
+    }
+
+    const moving = new Set(mailboxIds);
+    const applyLocal = (list: Mailbox[]) =>
+      list.map(mb => (moving.has(mb.id) ? { ...mb, parentId: newParentId ?? undefined } : mb));
+    const viewingId = get().viewingAccountId;
+    if (viewingId) {
+      set((state) => ({
+        accountMailboxes: {
+          ...state.accountMailboxes,
+          [viewingId]: applyLocal(state.accountMailboxes[viewingId] ?? []),
+        },
+      }));
+    } else {
+      set({ mailboxes: applyLocal(get().mailboxes) });
+    }
+
+    const failed: string[] = [];
+    try {
+      for (const group of groups) {
+        const refused = await group.client.updateMailboxes(group.updates, group.accountId);
+        for (const bareId of Object.keys(refused)) {
+          failed.push(group.storeIds[bareId] ?? bareId);
+        }
+      }
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to move folders' });
+      throw error;
+    } finally {
+      // Refused folders kept their old parent, so the optimistic patch is
+      // wrong for them; re-sync in every case.
+      if (viewingId) {
+        await refreshMailboxesForViewingAccount(client);
+      } else {
+        await get().fetchMailboxes(client);
+      }
+    }
+    return failed;
   },
 
   emptyMailbox: async (client, mailboxId) => {

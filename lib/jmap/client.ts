@@ -3233,6 +3233,28 @@ export class JMAPClient implements IJMAPClient {
     }
   }
 
+  async updateMailboxes(
+    updates: Record<string, { name?: string; parentId?: string | null; role?: string | null; sortOrder?: number }>,
+    accountId?: string,
+  ): Promise<Record<string, string>> {
+    const targetAccountId = accountId || this.accountId;
+    const failed: Record<string, string> = {};
+    for (const batch of batched(Object.entries(updates), this.getMaxObjectsInSet())) {
+      const response = await this.request([
+        ["Mailbox/set", { accountId: targetAccountId, update: Object.fromEntries(batch) }, "0"],
+      ]);
+      const [name, result] = response.methodResponses?.[0] ?? [];
+      if (name === 'error') {
+        throw new Error(result?.description || result?.type || 'Failed to update mailboxes');
+      }
+      const notUpdated = (result?.notUpdated ?? {}) as Record<string, { type?: string }>;
+      for (const [id, err] of Object.entries(notUpdated)) {
+        failed[id] = err?.type || 'unknown';
+      }
+    }
+    return failed;
+  }
+
   /**
    * Destroys a folder. By default the server refuses a non-empty folder
    * (`mailboxHasEmail`); with `removeEmails` the messages that are only in

@@ -162,6 +162,16 @@ export class DemoJMAPClient implements IJMAPClient {
     if (mb) Object.assign(mb, changes);
   }
 
+  async updateMailboxes(updates: Record<string, { name?: string; parentId?: string | null; role?: string | null; sortOrder?: number }>, _accountId?: string): Promise<Record<string, string>> {
+    const failed: Record<string, string> = {};
+    for (const [id, changes] of Object.entries(updates)) {
+      const mb = this.data.mailboxes.find(m => m.id === id);
+      if (mb) Object.assign(mb, changes);
+      else failed[id] = 'notFound';
+    }
+    return failed;
+  }
+
   async deleteMailbox(mailboxId: string, _accountId?: string): Promise<void> {
     this.data.mailboxes = this.data.mailboxes.filter(m => m.id !== mailboxId);
     // Also remove emails in this mailbox
