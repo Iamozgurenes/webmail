@@ -30,6 +30,12 @@ let syncServerUrl: string | null = null;
 let syncTimeout: ReturnType<typeof setTimeout> | null = null;
 let pendingSync: SettingsSyncJob | null = null;
 let isLoadingFromServer = false;
+// Set by loadFromServer when this browser holds templates (or deletions) the
+// server blob lacks; enableSync then pushes once instead of waiting for the
+// next unrelated settings change.
+let pushTemplatesAfterLoad = false;
+// Wired up in the window-only init block below; null during SSR.
+let requestSync: (() => void) | null = null;
 
 const SYNC_DEBOUNCE_MS = 2000;
 
@@ -67,6 +73,32 @@ export function registerTemplateSyncBridge(
 ): void {
   templateSyncBridge = bridge;
   subscribe(() => onTemplateStoreChange?.());
+}
+
+/** Order-independent fingerprint of a template list plus its tombstones. */
+function templateStateKey(templates: unknown, deletedTemplateIds: unknown): string {
+  const list = Array.isArray(templates)
+    ? templates
+        .filter((t): t is { id: string; updatedAt?: unknown } =>
+          typeof t === 'object' && t !== null && typeof (t as { id?: unknown }).id === 'string')
+        .map((t) => `${t.id}@${String(t.updatedAt)}`)
+        .sort()
+    : [];
+  const tombstones = isPlainRecord(deletedTemplateIds) ? Object.keys(deletedTemplateIds).sort() : [];
+  return JSON.stringify([list, tombstones]);
+}
+
+/**
+ * Whether the local template state differs from what a server blob carries,
+ * so the blob needs a push. False when there is nothing local to push.
+ */
+function localTemplatesAhead(serverSettings: Record<string, unknown> | null): boolean {
+  const local = templateSyncBridge?.getSyncedState();
+  if (!local) return false;
+  if (local.templates.length === 0 && Object.keys(local.deletedTemplateIds).length === 0) return false;
+  if (!serverSettings) return true;
+  return templateStateKey(local.templates, local.deletedTemplateIds) !==
+    templateStateKey(serverSettings.templates, serverSettings.deletedTemplateIds);
 }
 
 async function syncSettingsJob(job: SettingsSyncJob, retries = 1): Promise<void> {
@@ -1147,6 +1179,10 @@ export const useSettingsStore = create<SettingsState>()(
         syncServerUrl = serverUrl;
         syncEnabled = true;
         syncLog('Settings sync enabled for', username);
+        if (pushTemplatesAfterLoad) {
+          pushTemplatesAfterLoad = false;
+          if (!get().settingsSyncDisabled) requestSync?.();
+        }
       },
 
       flushSync: async () => {
@@ -1174,6 +1210,7 @@ export const useSettingsStore = create<SettingsState>()(
       loadFromServer: async (username: string, serverUrl: string) => {
         try {
           syncLog('Loading settings from server for', username);
+          pushTemplatesAfterLoad = false;
           const res = await apiFetch('/api/settings', {
             headers: {
               'x-settings-username': username,
@@ -1188,6 +1225,7 @@ export const useSettingsStore = create<SettingsState>()(
           const { settings } = await res.json();
           if (!settings) {
             syncLog('No server settings found yet');
+            pushTemplatesAfterLoad = localTemplatesAhead(null);
             return false;
           }
           if (settings && typeof settings === 'object') {
@@ -1198,6 +1236,7 @@ export const useSettingsStore = create<SettingsState>()(
               serverAccountId: generateAccountId(username, serverUrl),
             });
             isLoadingFromServer = false;
+            pushTemplatesAfterLoad = localTemplatesAhead(settings);
             syncLog('Settings loaded from server successfully');
             // The per-account preferred sender identity (#507) is re-applied by
             // applyPreferredIdentity() in auth-store, invoked from the
@@ -1406,6 +1445,8 @@ if (typeof window !== 'undefined') {
       }
     }, SYNC_DEBOUNCE_MS);
   };
+
+  requestSync = triggerSync;
 
   // Auto-sync settings to server on any state change
   let prevSyncDisabled = useSettingsStore.getState().settingsSyncDisabled;
