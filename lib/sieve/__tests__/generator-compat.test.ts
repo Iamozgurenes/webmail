@@ -133,10 +133,13 @@ describe('the metadata version', () => {
     expect(versionOf(generate([{ ...rules[1], ...period }]))).toBe(2);
     // A rule that is off keeps its period for when it is on again.
     expect(versionOf(generate([{ ...rules[2], activeUntil: period.activeUntil }]))).toBe(2);
-    // Forwarding is remembered while it is off.
-    expect(versionOf(generate([], { vacationForward: { enabled: false, to: 'kollege@example.com', keepCopy: false } }))).toBe(2);
+    expect(versionOf(generate([], { vacationForward: { enabled: true, to: 'kollege@example.com', keepCopy: false } }))).toBe(2);
     expect(versionOf(generate([], { includeVacation: true, vacationAudience: { only: 'internal', domains: ['example.com'] } }))).toBe(2);
     expect(versionOf(generate(rules, { includeVacation: true }))).toBe(1);
+  });
+
+  it('stays 1 for a forward that is off, so turning it on and off again does not lock older editors out', () => {
+    expect(versionOf(generate([], { vacationForward: { enabled: false, to: 'kollege@example.com', keepCopy: false } }))).toBe(1);
   });
 
   it('reads version 2 back as its own', () => {

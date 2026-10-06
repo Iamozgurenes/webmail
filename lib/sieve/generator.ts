@@ -324,8 +324,10 @@ export function generateScript(
   }
   // An older build would take a version 1 script as its own and write it back
   // without what it does not know: a rule without its period forwards for
-  // good, the auto-reply goes to everyone. It leaves version 2 alone.
-  if (metadata.rules.some(hasPeriod) || metadata.vacationForward || metadata.vacationAudience) {
+  // good, the auto-reply goes to everyone. It leaves version 2 alone. A
+  // forward that is off only loses its remembered address that way, so it
+  // stays version 1: the native app still edits version 1 only.
+  if (metadata.rules.some(hasPeriod) || metadata.vacationForward?.enabled || metadata.vacationAudience) {
     metadata.version = 2;
   }
   // The JSON sits inside a /* ... */ comment: a "*/" in any string (a rule
