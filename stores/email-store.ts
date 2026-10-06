@@ -736,6 +736,36 @@ export function findArchiveMailbox(
 }
 
 /**
+ * Archive folder for the action, created when the account has none.
+ *
+ * Stalwart's default folder set has no archive-role mailbox, so on a fresh
+ * account the Archive button and shortcut only raised the not-found toast.
+ * The folder is created in the account the action targets (see
+ * findArchiveMailbox) with the `archive` role, so the sidebar shows it under
+ * its translated name and other clients recognise it. `refresh` reloads the
+ * mailbox list so the caller gets the store's own object (namespaced id,
+ * `originalId`) rather than the bare one Mailbox/set returned. (#578)
+ */
+export async function ensureArchiveMailbox(opts: {
+  client: IJMAPClient;
+  mailboxes: Mailbox[];
+  selectedMailboxId: string | null | undefined;
+  accountId?: string;
+  refresh: () => Promise<Mailbox[]>;
+}): Promise<Mailbox> {
+  const existing = findArchiveMailbox(opts.mailboxes, opts.selectedMailboxId, opts.accountId);
+  if (existing) return existing;
+
+  const viewMailbox = opts.mailboxes.find(m => m.id === opts.selectedMailboxId);
+  const scopeId = opts.accountId ?? (viewMailbox?.isShared ? viewMailbox.accountId : undefined);
+  await opts.client.createMailbox('Archive', undefined, scopeId, { role: 'archive' });
+
+  const created = findArchiveMailbox(await opts.refresh(), opts.selectedMailboxId, opts.accountId);
+  if (!created) throw new ArchiveMailboxNotFoundError();
+  return created;
+}
+
+/**
  * JMAP accountId for opening an email that carries no source stamps.
  *
  * Normally the selected folder decides: a shared/group folder's owner, else
@@ -3864,10 +3894,19 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     // Scope the archive folder to the viewed shared/group account (if any) so the
     // move lands on the owner account, not the user's own archive (which appears
     // first in the merged list); see resolveViewAccountId. Own view is unchanged.
-    const archiveMailbox = findArchiveMailbox(mailboxes, get().selectedMailbox);
-    if (!archiveMailbox) {
-      const error = new ArchiveMailboxNotFoundError();
-      set({ error: error.message });
+    let archiveMailbox: Mailbox;
+    try {
+      archiveMailbox = await ensureArchiveMailbox({
+        client: resolveActionClient(client),
+        mailboxes,
+        selectedMailboxId: get().selectedMailbox,
+        refresh: async () => {
+          await refreshMailboxesForViewingAccount(client);
+          return resolveActionMailboxes();
+        },
+      });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to archive emails' });
       throw error;
     }
 

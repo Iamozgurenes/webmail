@@ -31,7 +31,7 @@ import { usePolicyStore } from "@/stores/policy-store";
 import type { UnifiedAccountClient } from "@/lib/unified-mailbox";
 import { connectedAccountsGrew } from "@/lib/unified-mailbox";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
-import { useEmailStore, buildUnifiedAccountClients, invalidateUnifiedMailboxes, captureViewToken, ArchiveMailboxNotFoundError, findArchiveMailbox, resolveUnstampedEmailAccountId, emptyFolderMovesToTrash } from "@/stores/email-store";
+import { useEmailStore, buildUnifiedAccountClients, invalidateUnifiedMailboxes, captureViewToken, ArchiveMailboxNotFoundError, ensureArchiveMailbox, resolveUnstampedEmailAccountId, emptyFolderMovesToTrash } from "@/stores/email-store";
 import { groupSearchScopeFolders, SEARCH_SCOPE_ALL_FOLDERS } from "@/lib/search-scope-folders";
 import { toast } from "@/stores/toast-store";
 import { formatRejectedRecipients, type JMAPClient } from "@/lib/jmap/client";
@@ -2362,17 +2362,23 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
 
     const currentMailboxes = readMailboxes();
 
-    // Scope like batchArchive: the owning account in unified view, otherwise
-    // the selected shared folder's owner, otherwise the user's own archive. (#889)
-    const archiveMailbox = findArchiveMailbox(currentMailboxes, selectedMailbox, archiveAccountId);
-    if (!archiveMailbox) {
-      toast.error(t('email_viewer.archive_mailbox_not_found'));
-      return;
-    }
-
     const { archiveMode } = useSettingsStore.getState();
 
     try {
+      // Scope like batchArchive: the owning account in unified view, otherwise
+      // the selected shared folder's owner, otherwise the user's own archive
+      // (#889); created on first use when the account has none (#578).
+      const archiveMailbox = await ensureArchiveMailbox({
+        client: archiveClient,
+        mailboxes: currentMailboxes,
+        selectedMailboxId: selectedMailbox,
+        accountId: archiveAccountId,
+        refresh: async () => {
+          await refreshMailboxes();
+          return readMailboxes();
+        },
+      });
+
       if (archiveMode === 'single') {
         await moveThreadToMailbox(client, emailToArchive.id, archiveMailbox.id);
       } else {

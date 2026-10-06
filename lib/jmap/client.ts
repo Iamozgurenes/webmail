@@ -3167,7 +3167,7 @@ export class JMAPClient implements IJMAPClient {
     this.assertEmailSetSucceeded(response, "mark as not spam");
   }
 
-  async createMailbox(name: string, parentId?: string, accountId?: string): Promise<Mailbox> {
+  async createMailbox(name: string, parentId?: string, accountId?: string, options?: { role?: string }): Promise<Mailbox> {
     const targetAccountId = accountId || this.accountId;
     const createId = `new-${Date.now()}`;
     // Subscribe explicitly: IMAP clients that list folders via LSUB
@@ -3176,6 +3176,9 @@ export class JMAPClient implements IJMAPClient {
     const createData: Record<string, unknown> = { name, isSubscribed: true };
     if (parentId) {
       createData.parentId = parentId;
+    }
+    if (options?.role) {
+      createData.role = options.role;
     }
 
     const response = await this.request([
@@ -3205,6 +3208,7 @@ export class JMAPClient implements IJMAPClient {
       id: created.id,
       name,
       parentId,
+      role: options?.role,
       sortOrder: 0,
       totalEmails: 0,
       unreadEmails: 0,
