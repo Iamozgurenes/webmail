@@ -167,8 +167,10 @@ export function VacationSettings() {
   };
 
   // Who gets the auto-reply as a save stores it: everyone, or the senders
-  // from (or not from) the account's domains as they are now.
-  const canNarrow = audienceAvailable && domains.length > 0;
+  // from (or not from) the account's domains as they are now. The domains
+  // come from the signed-in user's identities, so a managed (shared) account
+  // offers no narrowing rather than one built from the wrong domains.
+  const canNarrow = audienceAvailable && !managedAccountId && domains.length > 0;
   const audienceSettings = !canNarrow
     ? undefined
     : audienceOnly === 'all' ? null : { only: audienceOnly, domains };

@@ -8,6 +8,7 @@ import { STALWART_VACATION_SCRIPT, mockStalwartAccount } from '@/lib/filters/__t
 import { useAuthStore } from '@/stores/auth-store';
 import { useFilterStore } from '@/stores/filter-store';
 import { useIdentityStore } from '@/stores/identity-store';
+import { useManagedAccountStore } from '@/stores/managed-account-store';
 import { useVacationStore } from '@/stores/vacation-store';
 import { VacationSettings } from '../vacation-settings';
 
@@ -62,6 +63,7 @@ const initial = {
   vacation: useVacationStore.getState(),
   filter: useFilterStore.getState(),
   identity: useIdentityStore.getState(),
+  managed: useManagedAccountStore.getState(),
 };
 beforeEach(() => {
   toast.error.mockClear();
@@ -72,6 +74,7 @@ afterEach(() => {
   useVacationStore.setState(initial.vacation, true);
   useFilterStore.setState(initial.filter, true);
   useIdentityStore.setState(initial.identity, true);
+  useManagedAccountStore.setState(initial.managed, true);
 });
 
 async function openCard(server: ReturnType<typeof stalwart>) {
@@ -386,6 +389,13 @@ describe('who gets the auto-reply, in the vacation card', () => {
   });
 
   it('is not offered without identities to tell the own domains', async () => {
+    await openCard(stalwart([rule('a')]));
+    expect(screen.queryByRole('combobox', { name: 'audience.label' })).toBeNull();
+  });
+
+  it('is not offered on a shared account, whose domains the signed-in identities do not tell', async () => {
+    withIdentities();
+    useManagedAccountStore.setState({ managedAccountId: 'b' } as never);
     await openCard(stalwart([rule('a')]));
     expect(screen.queryByRole('combobox', { name: 'audience.label' })).toBeNull();
   });
