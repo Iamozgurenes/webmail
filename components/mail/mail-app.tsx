@@ -2039,7 +2039,9 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
       to: draft.to?.map(a => a.email).filter(Boolean).join(', ') || '',
       cc: draft.cc?.map(a => a.email).filter(Boolean).join(', ') || '',
       bcc: draft.bcc?.map(a => a.email).filter(Boolean).join(', ') || '',
-      subject: draft.subject || '',
+      // Drafts saved before #1189 stored an empty subject as the composer's
+      // "(No Subject)" placeholder; reopen those with an empty field.
+      subject: draft.subject && draft.subject !== t('email_composer.no_subject') ? draft.subject : '',
       body: htmlBody || bodyText,
       // Re-open in the format the draft was written in: a text-only draft
       // used to land raw in the rich-text editor (newlines collapsed) and an
