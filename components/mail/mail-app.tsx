@@ -99,7 +99,8 @@ import { useProMultiAccountIdentities } from "@/hooks/use-pro-multi-account-iden
 import { Filter, ChevronDown, X, Paperclip, Star, Mail, MailOpen, RotateCcw, PenSquare, PenLine, CheckSquare, Square, AlertTriangle, ArrowLeft } from "@/components/icons";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { Button } from "@/components/ui/button";
-import { useConfig } from "@/hooks/use-config";
+import { useDocumentTitle } from "@/hooks/use-document-title";
+import { mailTitleContext } from "@/lib/tab-title";
 import { usePluginStore } from "@/stores/plugin-store";
 import { AppTopBannerSlot } from "@/components/plugins/app-top-banner-slot";
 import { useThemeStore } from "@/stores/theme-store";
@@ -165,7 +166,6 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
   const t = useTranslations();
   const tCommon = useTranslations('common');
   const tQuote = useTranslations('quote_header');
-  const { appName } = useConfig();
   const mailLayout = useSettingsStore((state) => state.mailLayout);
   // Phones present search full-screen from the header field rather than
   // giving it a permanent second bar under the header.
@@ -943,37 +943,33 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
     return () => clearTimeout(timer);
   }, [clearPendingUndoSend, pendingUndoSend]);
 
-  // Update page title based on context
-  useEffect(() => {
-    let title = appName;
+  // Page title: "<context> - <account> - <app>" (see useDocumentTitle)
+  const titleContext = useMemo(() => {
+    // Composing email
+    const composer = showComposer
+      ? {
+          compose: t('email_composer.new_message'),
+          reply: t('email_composer.reply'),
+          replyAll: t('email_composer.reply_all'),
+          forward: t('email_composer.forward'),
+        }[composerMode] || t('email_composer.new_message')
+      : null;
 
-    if (showComposer) {
-      // Composing email
-      const modeText = {
-        compose: t('email_composer.new_message'),
-        reply: t('email_composer.reply'),
-        replyAll: t('email_composer.reply_all'),
-        forward: t('email_composer.forward'),
-      }[composerMode] || t('email_composer.new_message');
-      title = `${modeText} - ${appName}`;
-    } else if (selectedEmail) {
-      // Reading email
-      const subject = selectedEmail.subject || t('email_viewer.no_subject');
-      title = `${subject} - ${appName}`;
-    } else if (selectedMailbox && mailboxes.length > 0) {
-      // Mailbox view
-      const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-      if (mailbox) {
-        const mailboxName = localizeMailboxName(mailbox.role, mailbox.name, (k) => t(`sidebar.mailboxes.${k}`));
-        const unreadCount = mailbox.unreadEmails || 0;
-        title = unreadCount > 0
-          ? `${mailboxName} (${unreadCount}) - ${appName}`
-          : `${mailboxName} - ${appName}`;
-      }
+    // Reading email
+    const subject = selectedEmail ? selectedEmail.subject || t('email_viewer.no_subject') : null;
+
+    // Mailbox view
+    let mailboxLine: string | null = null;
+    const mailbox = selectedMailbox ? mailboxes.find(mb => mb.id === selectedMailbox) : undefined;
+    if (mailbox) {
+      const mailboxName = localizeMailboxName(mailbox.role, mailbox.name, (k) => t(`sidebar.mailboxes.${k}`));
+      const unreadCount = mailbox.unreadEmails || 0;
+      mailboxLine = unreadCount > 0 ? `${mailboxName} (${unreadCount})` : mailboxName;
     }
 
-    document.title = title;
-  }, [showComposer, composerMode, selectedEmail, selectedMailbox, mailboxes, t, appName]);
+    return mailTitleContext({ composer, subject, mailbox: mailboxLine });
+  }, [showComposer, composerMode, selectedEmail, selectedMailbox, mailboxes, t]);
+  useDocumentTitle(titleContext);
 
   // When this page is rendered inside the Pro shell as the Mail tab body,
   // we hoist every "show composer" intent into its own Pro tab and reset
