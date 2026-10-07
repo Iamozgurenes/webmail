@@ -10,6 +10,7 @@ import { useSettingsStore } from '@/stores/settings-store';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useThemeStore } from '@/stores/theme-store';
 import { DEFAULT_SEARCH_FILTERS } from '@/lib/jmap/search-utils';
+import { threadKeyFor } from '@/lib/thread-utils';
 
 // Keep the real MailApp selection/download handlers and EmailViewer. Stub
 // unrelated shell UI and bootstrap requests so no server is contacted.
@@ -288,20 +289,15 @@ describe('standard mail UI blob routing', () => {
     expect(primary.downloadBlob).toHaveBeenCalledWith('same-blob', expect.any(String), 'message/rfc822', 'owner-b');
   });
 
-  it('keeps a direct folder source when Email/get completes after an account switch', async () => {
-    let finish!: (email: Email) => void;
-    primary.getEmail.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  it('keeps a direct shared-folder message unstamped so its thread key matches the row', async () => {
     useEmailStore.setState({ selectedEmail: message({ bodyValues: undefined }) });
     render(<MailApp />);
     await waitFor(() => expect(primary.getEmail).toHaveBeenCalledWith('email', 'nrichmond'));
-    act(() => {
-      useEmailStore.setState({ selectedMailbox: 'inbox' });
-      useAuthStore.setState({ client: asClient(other) as never, activeAccountId: 'login-other' });
-    });
-    await act(async () => finish(message()));
+    await waitFor(() => expect(useEmailStore.getState().selectedEmail?.bodyValues).toBeDefined());
+    const selected = useEmailStore.getState().selectedEmail!;
+    expect(threadKeyFor(selected)).toBe(threadKeyFor(useEmailStore.getState().emails[0]));
     await downloadAttachment();
     expect(primary.downloadBlob).toHaveBeenCalledWith('same-blob', expect.any(String), 'message/rfc822', 'nrichmond');
-    expect(other.downloadBlob).not.toHaveBeenCalled();
   });
 
   it('keeps an unstamped all-folders search hit on the primary account', async () => {

@@ -2442,7 +2442,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       // back to the selected-mailbox shared-folder logic for normal views.
       const selected = get().selectedEmail;
       const listEmail = selected?.id === emailId ? selected : get().emails.find(e => e.id === emailId);
-      const { client: actionClient, accountId, clientAccountId } = resolveEmailBlobContext(listEmail ?? null, client);
+      const { client: actionClient, accountId } = resolveEmailBlobContext(listEmail ?? null, client);
       if (!actionClient) throw new Error('No connected client for email source');
 
       const email = await actionClient.getEmail(emailId, accountId);
@@ -2454,8 +2454,10 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         annotatedEmail.accountId = listEmail?.accountId;
         annotatedEmail.accountLabel = listEmail?.accountLabel;
         annotatedEmail.sourceFolder = listEmail?.sourceFolder;
-        annotatedEmail.sourceClientAccountId = listEmail?.sourceClientAccountId ?? (accountId ? clientAccountId : undefined);
-        annotatedEmail.sourceAccountId = listEmail?.sourceAccountId ?? accountId;
+        // Only carry stamps the list row has. A direct-folder row stays
+        // unstamped, since threadKeyFor scopes keys by these stamps.
+        annotatedEmail.sourceClientAccountId = listEmail?.sourceClientAccountId;
+        annotatedEmail.sourceAccountId = listEmail?.sourceAccountId;
         set({ selectedEmail: annotatedEmail });
         return annotatedEmail;
       }

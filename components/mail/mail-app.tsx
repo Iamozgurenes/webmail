@@ -3506,7 +3506,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
 
     // Fetch the full content
     try {
-      const { client: fetchClient, accountId, clientAccountId } = resolveEmailBlobContext(listEmail ?? null, client);
+      const { client: fetchClient, accountId } = resolveEmailBlobContext(listEmail ?? null, client);
       if (!fetchClient) {
         console.warn('[mail-app] No connected client for email source');
         return;
@@ -3529,9 +3529,10 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
           fullEmail.accountLabel = listEmail.accountLabel;
           fullEmail.sourceFolder = listEmail.sourceFolder;
         }
-        // Keep a direct shared folder's owner after navigation as well.
-        fullEmail.sourceAccountId = listEmail?.sourceAccountId ?? accountId;
-        fullEmail.sourceClientAccountId = listEmail?.sourceClientAccountId ?? (accountId ? clientAccountId : undefined);
+        // Only stamped rows are re-stamped. A direct-folder row stays
+        // unstamped, since threadKeyFor scopes keys by these stamps.
+        fullEmail.sourceAccountId = listEmail?.sourceAccountId;
+        fullEmail.sourceClientAccountId = listEmail?.sourceClientAccountId;
         selectEmail(fullEmail);
         // Mark-as-read logic is now handled by useEffect
       }
