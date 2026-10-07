@@ -944,6 +944,9 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
   }, [clearPendingUndoSend, pendingUndoSend]);
 
   // Page title: "<context> - <account> - <app>" (see useDocumentTitle)
+  // The subject is kept out until the policy has loaded: a gate that keeps
+  // subjects out of browser history must not let one through while unknown.
+  const subjectInTabTitle = usePolicyStore((s) => s.loaded && s.isFeatureEnabled('tabTitleSubjectEnabled'));
   const titleContext = useMemo(() => {
     // Composing email
     const composer = showComposer
@@ -967,8 +970,8 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
       mailboxLine = unreadCount > 0 ? `${mailboxName} (${unreadCount})` : mailboxName;
     }
 
-    return mailTitleContext({ composer, subject, mailbox: mailboxLine });
-  }, [showComposer, composerMode, selectedEmail, selectedMailbox, mailboxes, t]);
+    return mailTitleContext({ composer, subject, mailbox: mailboxLine }, { showSubject: subjectInTabTitle });
+  }, [showComposer, composerMode, selectedEmail, selectedMailbox, mailboxes, t, subjectInTabTitle]);
   useDocumentTitle(titleContext);
 
   // When this page is rendered inside the Pro shell as the Mail tab body,

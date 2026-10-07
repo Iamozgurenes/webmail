@@ -41,4 +41,12 @@ describe('mailTitleContext', () => {
   it('has nothing to add before a mailbox is selected', () => {
     expect(mailTitleContext({})).toBeNull();
   });
+
+  it('names the mailbox instead of the open message when the subject is kept out', () => {
+    expect(mailTitleContext({ ...view, composer: null }, { showSubject: false })).toBe('Inbox (3)');
+  });
+
+  it('still names the composer when the subject is kept out', () => {
+    expect(mailTitleContext(view, { showSubject: false })).toBe('Reply');
+  });
 });

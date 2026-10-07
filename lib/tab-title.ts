@@ -21,7 +21,16 @@ export interface MailTitleView {
   mailbox?: string | null;
 }
 
-/** The context part of the mail view's tab title: composer, then message, then mailbox. */
-export function mailTitleContext(view: MailTitleView): string | null {
-  return view.composer || view.subject || view.mailbox || null;
+/**
+ * The context part of the mail view's tab title: composer, then message, then
+ * mailbox. The subject does not stay in the tab strip - browsers keep it in
+ * history and in the session-restore list, and screen shares show it - so an
+ * operator can keep it out (`tabTitleSubjectEnabled`). The mailbox line is
+ * shown instead, so the tab still says where you are. (#1159)
+ */
+export function mailTitleContext(
+  view: MailTitleView,
+  { showSubject = true }: { showSubject?: boolean } = {},
+): string | null {
+  return view.composer || (showSubject ? view.subject : null) || view.mailbox || null;
 }
