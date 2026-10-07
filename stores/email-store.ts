@@ -799,6 +799,31 @@ function resolveActionMailboxes(): Mailbox[] {
   return mailboxesInView(useEmailStore.getState());
 }
 
+/** Resolve blobs from the message's source, or the folder being browsed. */
+export function resolveEmailBlobContext(
+  email: Pick<Email, 'sourceClientAccountId' | 'sourceAccountId'> | null,
+  passedClient: IJMAPClient | null,
+): { client: IJMAPClient | null; accountId?: string; clientAccountId?: string } {
+  const state = useEmailStore.getState();
+  const auth = useAuthStore.getState();
+  const clientAccountId = email?.sourceClientAccountId ?? state.viewingAccountId ?? undefined;
+  // A stamped login must never fall back to another account: blob ids can collide.
+  const client = clientAccountId
+    ? auth.getClientForAccount(clientAccountId) ?? null
+    : passedClient;
+  const accountId = email?.sourceAccountId ?? resolveUnstampedEmailAccountId({
+    mailboxes: mailboxesInView(state),
+    selectedMailbox: state.selectedMailbox,
+    searchActive: !!state.searchQuery || !isFilterEmpty(state.searchFilters),
+    searchMailboxId: state.searchMailboxId,
+  });
+  return {
+    client,
+    accountId,
+    clientAccountId: clientAccountId ?? (client === auth.client ? auth.activeAccountId ?? undefined : undefined),
+  };
+}
+
 // List requests can finish after navigation. Never apply an old folder/tag
 // response (or error) to the view the user has since selected.
 function captureEmailListView(): () => boolean {
@@ -2415,21 +2440,22 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       // cross-account) the selected mailbox is virtual, so derive the client +
       // accountId from the email itself (handles shared/group accounts); fall
       // back to the selected-mailbox shared-folder logic for normal views.
-      const listEmail = get().emails.find(e => e.id === emailId);
-      let actionClient: IJMAPClient;
-      let accountId: string | undefined;
-      if (listEmail) {
-        ({ client: actionClient, accountId } = resolveEmailActionContext(listEmail, client));
-      } else {
-        const mailbox = resolveActionMailboxes().find(mb => mb.id === get().selectedMailbox);
-        actionClient = resolveActionClient(client);
-        accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-      }
+      const selected = get().selectedEmail;
+      const listEmail = selected?.id === emailId ? selected : get().emails.find(e => e.id === emailId);
+      const { client: actionClient, accountId, clientAccountId } = resolveEmailBlobContext(listEmail ?? null, client);
+      if (!actionClient) throw new Error('No connected client for email source');
 
       const email = await actionClient.getEmail(emailId, accountId);
 
       if (email) {
         const annotatedEmail = annotateScheduledEmail(email, get().scheduledSubmissionByEmailId);
+        // Email/get does not return client-only source metadata. Keep the source
+        // captured before the await, including automatic selection after actions.
+        annotatedEmail.accountId = listEmail?.accountId;
+        annotatedEmail.accountLabel = listEmail?.accountLabel;
+        annotatedEmail.sourceFolder = listEmail?.sourceFolder;
+        annotatedEmail.sourceClientAccountId = listEmail?.sourceClientAccountId ?? (accountId ? clientAccountId : undefined);
+        annotatedEmail.sourceAccountId = listEmail?.sourceAccountId ?? accountId;
         set({ selectedEmail: annotatedEmail });
         return annotatedEmail;
       }

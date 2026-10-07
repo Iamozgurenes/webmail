@@ -132,6 +132,8 @@ const SUB_MENU_ITEM_SELECTOR = '[role="menuitem"],[role="menuitemcheckbox"],[rol
 
 interface EmailViewerProps {
   email: Email | null;
+  /** Captured message routing supplied by the standard mail UI. */
+  blobSource?: { client: IJMAPClient | null; accountId?: string };
   isLoading?: boolean;
   onReply?: (draftText?: string) => void;
   onReplyAll?: () => void;
@@ -601,7 +603,7 @@ function DraggableAttachmentChip({ attachment, client, accountId, enabled, downl
     getBlobUrl: async () => {
       if (attachment.blobId && client) {
         try {
-          return await client.fetchBlobAsObjectUrl(attachment.blobId, attachment.name || undefined, attachment.type, accountId);
+          return await client.fetchBlobAsObjectUrl(attachment.blobId, downloadName || attachment.name || undefined, attachment.type, accountId);
         } catch {
           return null;
         }
@@ -638,6 +640,7 @@ function SidebarSection({ icon: Icon, title, children }: { icon: React.Component
 
 export function EmailViewer({
   email,
+  blobSource,
   isLoading = false,
   onReply,
   onReplyAll,
@@ -767,18 +770,17 @@ export function EmailViewer({
   const { tabletListVisible } = useUIStore();
   const { identities, client, isDemoMode, activeAccountId } = useAuthStore();
   const activeAccount = useAccountStore((s) => s.accounts.find((a) => a.id === activeAccountId));
-  // Blobs (inline images, drag-out, TNEF, embedded messages, thumbnails, bundle
-  // downloads) are account-scoped. In the unified / All-Mail view the open
-  // message may belong to another login (route to its client) or a delegated
-  // shared account (same client, owner accountId in the URL). Resolve both from
-  // the message's source so cross-account blob fetches don't 404 against the
-  // active account.
+  // The standard mail UI supplies message routing for preview/download,
+  // inline images, export and attachment drag-out. Other viewer hosts keep
+  // their existing fallback routing.
   const isUnifiedView = useEmailStore((s) => s.isUnifiedView);
-  const blobClient = useMemo(() => {
+  const legacyBlobClient = useMemo(() => {
     const scid = isUnifiedView ? email?.sourceClientAccountId : undefined;
     return (scid ? useAuthStore.getState().getClientForAccount(scid) : null) ?? client;
   }, [isUnifiedView, email?.sourceClientAccountId, client]);
-  const blobAccountId = isUnifiedView ? email?.sourceAccountId : undefined;
+  const legacyBlobAccountId = isUnifiedView ? email?.sourceAccountId : undefined;
+  const blobClient = blobSource ? blobSource.client : legacyBlobClient;
+  const blobAccountId = blobSource ? blobSource.accountId : legacyBlobAccountId;
 
   // List-Unsubscribe mailto: send the message ourselves - this is a webmail
   // client, handing a mailto: URL to the OS mail handler goes nowhere for
@@ -1368,7 +1370,7 @@ export function EmailViewer({
 
   // TNEF (winmail.dat) detection and processing
   useEffect(() => {
-    if (!email?.attachments || !client) return;
+    if (!email?.attachments || !blobClient) return;
 
     const tnefAtt = email.attachments.find(att => isTnefAttachment(att.name, att.type));
     if (!tnefAtt?.blobId) {
@@ -1460,7 +1462,7 @@ export function EmailViewer({
   // often empty Word boilerplate and the real content is inside a message/rfc822
   // attachment. Detect this pattern and unwrap the embedded email.
   useEffect(() => {
-    if (!email?.attachments || !client) return;
+    if (!email?.attachments || !blobClient) return;
 
     // Find message/rfc822 attachment
     const rfc822Att = email.attachments.find(
@@ -1567,7 +1569,7 @@ export function EmailViewer({
       };
     }
 
-    if (!client || !email?.attachments) {
+    if (!blobClient || !email?.attachments) {
       setCidBlobUrls({});
       return;
     }
@@ -2660,9 +2662,11 @@ export function EmailViewer({
 
   // Export email as .eml file
   const handleExportEmail = async () => {
-    if (!email?.blobId || !client) return;
+    const exportClient = blobSource ? blobSource.client : client;
+    const exportAccountId = blobSource?.accountId;
+    if (!email?.blobId || !exportClient) return;
     try {
-      await client.downloadBlob(email.blobId, emailExportFilename(email, emailFilenameOptions), 'message/rfc822');
+      await exportClient.downloadBlob(email.blobId, emailExportFilename(email, emailFilenameOptions), 'message/rfc822', exportAccountId);
     } catch {
       toast.error(tNotifications('export_email_error'));
       return;
