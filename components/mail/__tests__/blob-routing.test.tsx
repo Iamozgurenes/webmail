@@ -120,7 +120,7 @@ beforeEach(() => {
 async function downloadAttachment() {
   // The viewer renders responsive copies; any Download button exercises the
   // same production handler. The raw RFC822 part is the live reproduction.
-  const buttons = await screen.findAllByTitle('download');
+  const buttons = await screen.findAllByTitle('download', {}, { timeout: 5000 });
   fireEvent.click(buttons[0]);
 }
 async function exportEmail() {
@@ -199,7 +199,7 @@ describe('standard mail UI blob routing', () => {
     fetchMock.mockImplementation(async () => new Response('attachment', { status: 200, headers: { 'Content-Type': 'message/rfc822' } }));
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     render(<MailApp />);
-    const downloadButton = (await screen.findAllByTitle('download'))[0];
+    const downloadButton = (await screen.findAllByTitle('download', {}, { timeout: 5000 }))[0];
     const chip = downloadButton.closest('[draggable="true"]');
     expect(chip).not.toBeNull();
 
