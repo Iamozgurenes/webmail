@@ -22,7 +22,7 @@ import { TagPicker } from "./tag-picker";
 import { useMeasuredTagDisplay } from "@/hooks/use-tag-display";
 import { useKeywordFormat } from "@/hooks/use-keyword-format";
 import { getEmailTagIds } from "@/lib/thread-utils";
-import { getSecurityStatus, extractListHeaders } from "@/lib/email-headers";
+import { getSecurityStatus, extractListHeaders, getSenderVerification } from "@/lib/email-headers";
 import { emailToReadView } from "@/lib/plugin-projection";
 import { generateEmailSource } from "@/lib/email-source";
 import {
@@ -3020,6 +3020,19 @@ export function EmailViewer({
   }
 
   const sender = email.from?.[0];
+  const senderVerification = getSenderVerification(email.authenticationResults, sender?.email);
+  const senderVerificationLabel = senderVerification?.status === 'failed'
+    ? t('sender_check.failed_label')
+    : t('sender_check.unverified_label');
+  const senderVerificationMessage = !senderVerification
+    ? ''
+    : senderVerification.status === 'failed'
+      ? senderVerification.sentFrom
+        ? t('sender_check.failed_sent_from', { domain: senderVerification.domain, host: senderVerification.sentFrom })
+        : t('sender_check.failed', { domain: senderVerification.domain })
+      : senderVerification.sentFrom
+        ? t('sender_check.unverified_sent_from', { domain: senderVerification.domain, host: senderVerification.sentFrom })
+        : t('sender_check.unverified', { domain: senderVerification.domain });
   const isStarred = email.keywords?.$flagged;
   const isUnread = !email.keywords?.$seen;
   const isImportant = email.keywords?.["$important"];
@@ -4511,6 +4524,20 @@ export function EmailViewer({
                           onViewContact={handleViewContactSidebar}
                           className="text-sm text-start"
                         />
+                        {senderVerification && (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-xs whitespace-nowrap cursor-help",
+                              senderVerification.status === 'failed'
+                                ? "bg-red-500/[0.07] border-red-500/30 text-red-700 dark:text-red-400"
+                                : "bg-amber-500/[0.07] border-amber-500/30 text-amber-700 dark:text-amber-400",
+                            )}
+                            title={senderVerificationMessage}
+                          >
+                            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                            {senderVerificationLabel}
+                          </span>
+                        )}
                       </div>
                     </Row>
                     {replyToDifferent && (
@@ -4816,12 +4843,36 @@ export function EmailViewer({
         )}
 
         {/* Unified Notification Banner - External Content + Calendar Invitation + Read Receipt */}
-        {((hasBlockedContent && !allowExternalContent && externalContentPolicy !== 'allow') ||
+        {(senderVerification ||
+          (hasBlockedContent && !allowExternalContent && externalContentPolicy !== 'allow') ||
           hasCalendarInvitation ||
           (readReceiptResponse === 'ask' && shouldOfferReadReceipt)) && (
           <div className="border-b border-border bg-muted/30 isolate">
             <div className="px-6 py-1.5">
               <div className="flex flex-col gap-3 isolate">
+                {/* Sender the server's checks don't back */}
+                {senderVerification && (
+                  <div className="flex items-start gap-3 py-1">
+                    <div className={cn(
+                      "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm",
+                      senderVerification.status === 'failed' ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning",
+                    )}>
+                      <ShieldAlert className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {senderVerificationLabel}
+                      </div>
+                      <div className="text-sm font-medium text-foreground break-words">
+                        {senderVerificationMessage}
+                      </div>
+                      <div className="text-sm text-muted-foreground break-words">
+                        {t('sender_check.caution')}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* External Content Controls */}
                 {hasBlockedContent && !allowExternalContent && externalContentPolicy !== 'allow' && (
                   <div className="flex items-start gap-3 py-1">
@@ -4847,7 +4898,9 @@ export function EmailViewer({
                             {t('load_external_content')}
                           </button>
                         )}
-                        {email.from?.[0]?.email && (
+                        {/* Trusting a forged address would load remote content
+                            for the next forgery too. */}
+                        {email.from?.[0]?.email && !senderVerification && (
                           <button
                             onClick={() => {
                               const senderEmail = email.from?.[0]?.email;
