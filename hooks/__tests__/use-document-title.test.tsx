@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, waitFor } from '@testing-library/react';
 
 vi.mock('@/hooks/use-config', () => ({ useConfig: () => ({ appName: 'Acme Mail' }) }));
 
 import { useDocumentTitle } from '@/hooks/use-document-title';
 import { useAccountStore, type AccountEntry } from '@/stores/account-store';
+import { PaneIdContext, ProTabFocusContext } from '@/hooks/use-pane-context';
 
 const account = (id: string, email: string) => ({ id, email }) as AccountEntry;
 
@@ -17,6 +18,21 @@ function rerenderMetadataTitle(title = 'Acme Mail'): void {
   const el = document.createElement('title');
   el.textContent = title;
   document.head.appendChild(el);
+}
+
+/** A surface in a Pro shell tab, which stays mounted while hidden. */
+function TitleProbe({ context }: { context: string }) {
+  useDocumentTitle(context);
+  return null;
+}
+function ProTab({ context, focused }: { context: string; focused: boolean }) {
+  return (
+    <PaneIdContext.Provider value="main">
+      <ProTabFocusContext.Provider value={focused}>
+        <TitleProbe context={context} />
+      </ProTabFocusContext.Provider>
+    </PaneIdContext.Provider>
+  );
 }
 
 /** Drains MutationObserver callbacks. */
@@ -67,6 +83,20 @@ describe('useDocumentTitle', () => {
     rerenderMetadataTitle();
     await waitFor(() => expect(document.title).toBe('Settings - jane@example.com - Acme Mail'));
     await settle();
+    expect(document.title).toBe('Settings - jane@example.com - Acme Mail');
+  });
+
+  it('in the Pro shell, leaves the title to the focused tab', () => {
+    const mail = render(<ProTab context="Inbox" focused />);
+    const settings = render(<ProTab context="Settings" focused={false} />);
+    expect(document.title).toBe('Inbox - jane@example.com - Acme Mail');
+
+    mail.rerender(<ProTab context="Inbox" focused={false} />);
+    settings.rerender(<ProTab context="Settings" focused />);
+    expect(document.title).toBe('Settings - jane@example.com - Acme Mail');
+
+    // New mail in the hidden Mail tab must not take the title back.
+    mail.rerender(<ProTab context="Inbox (5)" focused={false} />);
     expect(document.title).toBe('Settings - jane@example.com - Acme Mail');
   });
 

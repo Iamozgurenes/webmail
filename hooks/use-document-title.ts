@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useConfig } from '@/hooks/use-config';
+import { useIsFocusedProTab, usePaneId } from '@/hooks/use-pane-context';
 import { useAccountStore } from '@/stores/account-store';
 import { formatTabTitle } from '@/lib/tab-title';
 
@@ -25,8 +26,14 @@ export function useDocumentTitle(context?: string | null): void {
     (s) => s.accounts.find((a) => a.id === s.activeAccountId)?.email || null,
   );
   const title = formatTabTitle(context, account, appName);
+  // The Pro shell keeps every opened tab mounted (hidden), so only the
+  // focused tab may claim the title; outside Pro every surface is in view.
+  const paneId = usePaneId();
+  const focusedProTab = useIsFocusedProTab();
+  const inView = paneId === null || focusedProTab;
 
   useEffect(() => {
+    if (!inView) return;
     const self = Symbol('document-title');
     owner = self;
     // Termination: setting the title is itself a <head> mutation; on that run
@@ -41,5 +48,5 @@ export function useDocumentTitle(context?: string | null): void {
       observer.disconnect();
       if (owner === self) owner = null;
     };
-  }, [title]);
+  }, [title, inView]);
 }
