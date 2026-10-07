@@ -31,7 +31,7 @@ import { usePolicyStore } from "@/stores/policy-store";
 import type { UnifiedAccountClient } from "@/lib/unified-mailbox";
 import { connectedAccountsGrew } from "@/lib/unified-mailbox";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
-import { useEmailStore, buildUnifiedAccountClients, invalidateUnifiedMailboxes, captureViewToken, ArchiveMailboxNotFoundError, ensureArchiveMailbox, resolveUnstampedEmailAccountId, emptyFolderMovesToTrash } from "@/stores/email-store";
+import { useEmailStore, buildUnifiedAccountClients, invalidateUnifiedMailboxes, captureViewToken, ArchiveMailboxNotFoundError, ensureArchiveMailbox, resolveUnstampedEmailAccountId, resolveEmailBlobContext, emptyFolderMovesToTrash } from "@/stores/email-store";
 import { groupSearchScopeFolders, SEARCH_SCOPE_ALL_FOLDERS } from "@/lib/search-scope-folders";
 import { toast } from "@/stores/toast-store";
 import { formatRejectedRecipients, type JMAPClient } from "@/lib/jmap/client";
@@ -197,7 +197,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
   const [conversationEmails, setConversationEmails] = useState<Email[]>([]);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [rateLimitSecondsLeft, setRateLimitSecondsLeft] = useState<number | null>(null);
-  const [previewAttachment, setPreviewAttachment] = useState<{ blobId: string; name: string; type?: string; accountId?: string; clientAccountId?: string } | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ blobId: string; name: string; type?: string; accountId?: string; client: NonNullable<typeof client> } | null>(null);
   // Office attachments open read-only in the configured WOPI editor (#1047).
   const [officeAttachment, setOfficeAttachment] = useState<{ blobId: string; name: string; type?: string; size?: number; accountId: string; slot: number | null } | null>(null);
   const wopiStatus = useWopiStatus(true);
@@ -1641,17 +1641,13 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
     // Skip when handleEmailSelect already started a fetch (it sets isLoadingEmail before
     // calling selectEmail on the stub), to avoid a duplicate request.
     if (!selectedEmail.bodyValues && !isLoadingEmail) {
-      const perAccountClient = isUnifiedView && selectedEmail.sourceClientAccountId
-        ? useAuthStore.getState().getClientForAccount(selectedEmail.sourceClientAccountId)
-        : undefined;
-      const fetchClient = perAccountClient ?? client;
       setLoadingEmail(true);
-      fetchEmailContent(fetchClient, selectedEmail.id).finally(() => {
+      fetchEmailContent(client, selectedEmail.id).finally(() => {
         setLoadingEmail(false);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEmail?.id]);
+  }, [selectedEmail?.id, selectedEmail?.sourceClientAccountId, selectedEmail?.sourceAccountId]);
 
   // Opening a message hides the list on tablet, but plenty of paths clear the
   // reading pane without going through a "back" handler (delete/move/archive,
@@ -3154,20 +3150,11 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
     };
   }, []);
 
-  // Blobs are scoped per JMAP account. In the unified/All-Mail view the open
-  // message may belong to another login (route to its client) or to a delegated
-  // shared account (same client, but the owner's accountId in the download URL).
-  // Resolve both from the email's source so attachments on cross-account
-  // messages can be viewed/downloaded instead of 404ing against the active
-  // account.
+  // Resolve from the originating message, including direct shared folders.
   const resolveBlobSource = useCallback((email: typeof selectedEmail) => {
-    const clientAccountId = isUnifiedView ? email?.sourceClientAccountId : undefined;
-    const blobClient = clientAccountId
-      ? (useAuthStore.getState().getClientForAccount(clientAccountId) ?? client)
-      : client;
-    const accountId = isUnifiedView ? email?.sourceAccountId : undefined;
+    const { client: blobClient, accountId, clientAccountId } = resolveEmailBlobContext(email, client);
     return { blobClient, accountId, clientAccountId };
-  }, [isUnifiedView, client]);
+  }, [client]);
 
   // Opens an attachment the built-in preview cannot render but the office
   // editor can (docx, odt, xlsx, ...). The launch route runs server-side with
@@ -3198,7 +3185,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
     try {
       const { mailAttachmentAction } = useSettingsStore.getState();
       if (mailAttachmentAction === 'preview' && isFilePreviewable(name, attachment.type)) {
-        setPreviewAttachment({ blobId: attachment.blobId, name, type: attachment.type, accountId, clientAccountId });
+        setPreviewAttachment({ blobId: attachment.blobId, name, type: attachment.type, accountId, client: blobClient });
         return;
       }
       if (mailAttachmentAction === 'preview' && openOfficeAttachment(
@@ -3258,7 +3245,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
       const { mailAttachmentAction } = useSettingsStore.getState();
 
       if (!forceDownload && mailAttachmentAction === 'preview' && isFilePreviewable(name, type)) {
-        setPreviewAttachment({ blobId, name, type, accountId, clientAccountId });
+        setPreviewAttachment({ blobId, name, type, accountId, client: blobClient });
         return;
       }
       if (!forceDownload && mailAttachmentAction === 'preview' && openOfficeAttachment(
@@ -3271,20 +3258,15 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
     }
   };
 
-  const previewBlobClient = useCallback(() => {
-    const id = previewAttachment?.clientAccountId;
-    return id ? (useAuthStore.getState().getClientForAccount(id) ?? client) : client;
-  }, [previewAttachment, client]);
-
   const handlePreviewAttachmentDownload = useCallback(async () => {
-    const c = previewBlobClient();
+    const c = previewAttachment?.client;
     if (!c || !previewAttachment) return;
 
     await c.downloadBlob(previewAttachment.blobId, previewAttachment.name, previewAttachment.type, previewAttachment.accountId);
-  }, [previewBlobClient, previewAttachment]);
+  }, [previewAttachment]);
 
   const getPreviewAttachmentContent = useCallback(async () => {
-    const c = previewBlobClient();
+    const c = previewAttachment?.client;
     if (!c || !previewAttachment) {
       throw new Error('No attachment selected');
     }
@@ -3295,7 +3277,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
       blob,
       contentType: previewAttachment.type || blob.type || 'application/octet-stream',
     };
-  }, [previewBlobClient, previewAttachment]);
+  }, [previewAttachment]);
 
   const handleQuickReply = async (body: string) => {
     if (!client || !selectedEmail) return;
@@ -3525,40 +3507,11 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
 
     // Fetch the full content
     try {
-      // Emails fetched through an aggregate view carry their source reference:
-      // the login they are reachable through (`sourceClientAccountId`) and their
-      // owning JMAP account (`sourceAccountId`). Honor the stamps whenever they
-      // are present — not only while `isUnifiedView` is set, since a stamped list
-      // can outlive that flag — so the fetch goes to the server that actually owns
-      // the mail. Works uniformly for personal and shared/group sources: for
-      // personal the owning account equals the client's primary (no-op). (#281)
-      //
-      // Unstamped emails belong to the account being browsed: the per-account
-      // sidebar's `viewingAccountId` when set, otherwise the active login. A
-      // shared folder on that client still needs its owner accountId. (#847)
-      const sourceClientId = listEmail?.sourceClientAccountId;
-      const sourceClient = sourceClientId
-        ? useAuthStore.getState().getClientForAccount(sourceClientId)
-        : undefined;
-      if (sourceClientId && !sourceClient) {
-        // No silent fallback to the active client: with colliding ids that would
-        // render another account's mail under this row.
-        console.warn('[mail-app] No connected client for source account', sourceClientId);
+      const { client: fetchClient, accountId, clientAccountId } = resolveEmailBlobContext(listEmail ?? null, client);
+      if (!fetchClient) {
+        console.warn('[mail-app] No connected client for email source');
         return;
       }
-      const fetchClient = sourceClient
-        ?? (viewingAccountId ? useAuthStore.getState().getClientForAccount(viewingAccountId) : undefined)
-        ?? client;
-
-      // During an unscoped search the hit is the primary account's, not the
-      // selected shared folder's owner - see resolveUnstampedEmailAccountId. (#923)
-      const accountId = listEmail?.sourceAccountId
-        ?? resolveUnstampedEmailAccountId({
-            mailboxes: viewMailboxes,
-            selectedMailbox,
-            searchActive: !!searchQuery || !isFilterEmpty(searchFilters),
-            searchMailboxId,
-          });
 
       const fullEmail = await fetchClient.getEmail(email.id, accountId);
       if (fullEmail) {
@@ -3575,9 +3528,11 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
         if (listEmail?.sourceClientAccountId) {
           fullEmail.accountId = listEmail.accountId;
           fullEmail.accountLabel = listEmail.accountLabel;
-          fullEmail.sourceClientAccountId = listEmail.sourceClientAccountId;
-          fullEmail.sourceAccountId = listEmail.sourceAccountId;
+          fullEmail.sourceFolder = listEmail.sourceFolder;
         }
+        // Keep a direct shared folder's owner after navigation as well.
+        fullEmail.sourceAccountId = listEmail?.sourceAccountId ?? accountId;
+        fullEmail.sourceClientAccountId = listEmail?.sourceClientAccountId ?? (accountId ? clientAccountId : undefined);
         selectEmail(fullEmail);
         // Mark-as-read logic is now handled by useEffect
       }
@@ -4521,6 +4476,7 @@ export function MailApp({ linkSegments: routeSegments }: MailAppProps = {}) {
                 <ErrorBoundary fallback={EmailViewerErrorFallback}>
                   <EmailViewer
                     email={selectedEmail}
+                    blobSource={resolveEmailBlobContext(selectedEmail, client)}
                     isLoading={isLoadingEmail}
                     onReply={handleReply}
                     onReplyAll={handleReplyAll}
