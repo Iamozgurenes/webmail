@@ -91,6 +91,7 @@ import {
 } from "@/lib/calendar-scroll-window";
 import { useLiteLinkSegments } from "@/hooks/use-lite-link-segments";
 import { findMeetingLink } from "@/lib/event-links";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 
 type PendingScopeAction =
   | { type: "edit"; event: CalendarEvent; updates: Partial<CalendarEvent>; sendScheduling?: boolean }
@@ -111,6 +112,8 @@ export function CalendarApp({ linkSegments: routeSegments }: CalendarAppProps = 
   const linkSegments = useLiteLinkSegments('calendar', routeSegments);
   const router = useRouter();
   const t = useTranslations("calendar");
+  const tSidebar = useTranslations("sidebar");
+  useDocumentTitle(tSidebar("calendar"));
   const tWebcalAction = useTranslations("calendar.webcal_action");
   const tDeepLink = useTranslations("deep_link");
   const isMobile = useIsMobile();

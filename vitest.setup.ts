@@ -112,6 +112,34 @@ for (const prop of ['localStorage', 'sessionStorage'] as const) {
   }
 }
 
+// jsdom's own StorageEvent constructor WebIDL-validates `storageArea` against
+// its internal Storage class specifically -- a closed-over reference, not a
+// lookup of the global `Storage` we just replaced above -- so it rejects our
+// localStorage/sessionStorage as "not of type 'Storage'". Replace the
+// constructor too so code that dispatches a real `storage` event (cross-tab
+// sync tests) can hand it our storage objects.
+class MemoryStorageEvent extends Event {
+  readonly key: string | null;
+  readonly oldValue: string | null;
+  readonly newValue: string | null;
+  readonly url: string;
+  readonly storageArea: Storage | null;
+
+  constructor(type: string, init: StorageEventInit = {}) {
+    super(type, init);
+    this.key = init.key ?? null;
+    this.oldValue = init.oldValue ?? null;
+    this.newValue = init.newValue ?? null;
+    this.url = init.url ?? '';
+    this.storageArea = init.storageArea ?? null;
+  }
+}
+
+for (const target of [globalThis, typeof window !== 'undefined' ? window : undefined]) {
+  if (!target) continue;
+  Object.defineProperty(target, 'StorageEvent', { value: MemoryStorageEvent, writable: true, configurable: true });
+}
+
 // jsdom does not implement matchMedia; components that read media queries
 // (e.g. responsive layout hooks) call it during render. Provide a minimal
 // no-match stub so those components can render under test.

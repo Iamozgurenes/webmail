@@ -2038,7 +2038,10 @@ export function EmailComposer({
       const previousDraftId = draftIdRef.current;
       let savedDraft : AlmostSavedDraft = {
        to: toAddresses,
-        subject: subject || t('no_subject'),
+        // Save an empty subject as empty. A "(No Subject)" placeholder here
+        // came back as a real subject on reopen, and Send then skipped the
+        // empty-subject warning (#1189).
+        subject,
         body: draftTextBody,
         cc: ccAddresses,
         bcc: bccAddresses,
